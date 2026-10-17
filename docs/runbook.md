@@ -1,0 +1,159 @@
+# Steps to Run
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Go | 1.21+ | Tested with Go 1.27.1 |
+| Git | any | For cloning / versioning |
+| C compiler (gcc/clang) | any | Required by `go-sqlite3` CGO dependency |
+| SQLite | bundled | `go-sqlite3` includes libsqlite3; no system SQLite needed |
+
+Verify Go:
+```bash
+go version
+# go version go1.27.1 linux/amd64
+```
+
+## Clone / Setup
+
+```bash
+git clone <repo> mem-sys
+cd mem-sys
+```
+
+The repo already contains:
+- `docs/spec.md` — full specification
+- `docs/architecture.md` — backend architecture
+- `docs/api.md` — REST + MCP API reference
+- `docs/runbook.md` — this file
+- `migrations/001_core_mvp.sql` — SQLite schema
+- `cmd/mem-sys/main.go` — application entrypoint
+- `internal/` — store, service, http, mcp, db layers
+
+## Build
+
+```bash
+go build -o mem-sys ./cmd/mem-sys
+```
+
+Produces a single binary `mem-sys`.
+
+## Run
+
+The binary supports two modes:
+
+### HTTP REST server (default)
+
+```bash
+./mem-sys --db mem-sys.db --http :8080
+```
+
+Flags:
+- `--db` — SQLite database file path (default `mem-sys.db`). Use `:memory:` for in-memory.
+- `--http` — HTTP listen address (default `localhost:8080`).
+- `--mcp` — run as MCP stdio server instead of HTTP.
+
+Example output:
+```
+time=2026-10-17T06:53:20Z level=INFO msg=listening addr=:8080
+```
+
+### MCP stdio server
+
+```bash
+MEM_SYS_PRINCIPAL=user-local ./mem-sys --mcp
+```
+
+Speaks JSON-RPC 2.0 over stdin/stdout. Use an MCP client (e.g. Claude Desktop, Cursor, or an MCP inspector) to connect.
+
+## Seed Data (auto-seeded on startup)
+
+On first launch the system creates:
+| Principal ID | Name | Type | Global Role |
+|---|---|---|---|
+| `admin-alice` | Alice | human | admin |
+| `user-bob` | Bob | human | user |
+| `agent-dev` | dev-agent | agent | user |
+
+And one module:
+- `auth` ("Authentication module"), owned by `admin-alice`.
+
+## Example Workflow (curl)
+
+Start the server:
+```bash
+./mem-sys --db /tmp/mem.db --http :8080 &
+```
+
+1. **Check identity (Alice, admin + owner)**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  http://localhost:8080/api/v1/me
+```
+
+2. **List modules**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  http://localhost:8080/api/v1/modules
+```
+
+3. **Bob submits a proposal** (capture the `proposal.id` from the response)
+```bash
+curl -s -H "Authorization: Bearer user-bob" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"The login endpoint rate limits users to 5 attempts per minute.","module_hint":"auth","intent":"new_fact","idempotency_key":"prop-001"}' \
+  http://localhost:8080/api/v1/proposals
+```
+
+4. **Alice (module owner) accepts the proposal**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"accept","acting_role":"module_owner","edited_title":"Login rate limit","edited_body":"The login endpoint allows 5 attempts per minute per user."}' \
+  http://localhost:8080/api/v1/proposals/<PROPOSAL_ID>/review
+```
+
+5. **List facts in the auth module**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  http://localhost:8080/api/v1/modules/<MODULE_ID>/facts
+```
+
+6. **Export module as JSON**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  -H "Content-Type: application/json" \
+  -d '{"module_id":"<MODULE_ID>","format":"json"}' \
+  http://localhost:8080/api/v1/exports
+```
+
+7. **Export as Markdown**
+```bash
+curl -s -H "Authorization: Bearer admin-alice" \
+  -H "Content-Type: application/json" \
+  -d '{"module_id":"<MODULE_ID>","format":"markdown"}' \
+  http://localhost:8080/api/v1/exports
+```
+
+## Run Tests
+
+```bash
+go test ./...
+```
+
+Expected: `ok mem-sys/internal/service`.
+
+## Stop
+
+```bash
+pkill -f mem-sys
+rm -f mem-sys.db   # remove SQLite file to reset state
+```
+
+## Notes
+
+- SQLite is single-writer; the store sets `SetMaxOpenConns(1)` for safety in the MVP.
+- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`).
+- To reset state, delete the `--db` file and restart.
+- No external services (Postgres, vector DB, LLM) are required for the MVP.
