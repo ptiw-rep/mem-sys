@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -13,6 +14,15 @@ import (
 type DB struct {
 	*sql.DB
 	logger *slog.Logger
+}
+
+func migrationsDir() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "migrations"
+	}
+	dir := filepath.Dir(filename)
+	return filepath.Join(dir, "..", "..", "migrations")
 }
 
 func Open(path string) (*DB, error) {
@@ -40,13 +50,13 @@ func Open(path string) (*DB, error) {
 }
 
 func runMigrations(conn *sql.DB) error {
-	entries, err := os.ReadDir("migrations")
+	entries, err := os.ReadDir(migrationsDir())
 	if err != nil {
 		return err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, e := range entries {
-		data, err := os.ReadFile(filepath.Join("migrations", e.Name()))
+		data, err := os.ReadFile(filepath.Join(migrationsDir(), e.Name()))
 		if err != nil {
 			return err
 		}

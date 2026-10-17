@@ -165,7 +165,8 @@ func (s *Service) CreateProposal(ctx context.Context, in CreateProposalInput) (*
 		MappingConfidence:   in.MappingConfidence,
 		MappingExplanation:  in.MappingExplanation,
 	}
-	if err := s.st.CreateProposal(ctx, *p); err != nil {
+	created, err := s.st.CreateProposal(ctx, *p)
+	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "unique constraint") {
 			// idempotency: return existing
 			existing, gerr := s.st.GetProposalByIdempotencyKey(ctx, in.IdempotencyKey)
@@ -175,10 +176,10 @@ func (s *Service) CreateProposal(ctx context.Context, in CreateProposalInput) (*
 		}
 		return nil, fmt.Errorf("create proposal: %w", err)
 	}
-	if err := s.logEvent(ctx, "proposal", p.ID, "proposal.created", &Actor{PrincipalID: in.SubmitterID}, nil, p, p.ID); err != nil {
+	if err := s.logEvent(ctx, "proposal", created.ID, "proposal.created", &Actor{PrincipalID: in.SubmitterID}, nil, created, created.ID); err != nil {
 		return nil, err
 	}
-	return p, nil
+	return created, nil
 }
 
 type ReviewProposalInput struct {
@@ -253,20 +254,20 @@ func (s *Service) acceptProposal(ctx context.Context, p *store.Proposal, actor *
 
 	factID := ""
 	{
-		f := &store.Fact{
+		fact, err := s.st.CreateFact(ctx, store.Fact{
 			Title:           title,
 			Kind:            "other",
 			Status:          "active",
 			OriginProposalID: &p.ID,
 			CreatedBy:       actor.PrincipalID,
-		}
-		if err := s.st.CreateFact(ctx, *f); err != nil {
+		})
+		if err != nil {
 			return nil, err
 		}
-		factID = f.ID
+		factID = fact.ID
 
-		rev := &store.FactRevision{
-			FactID:           f.ID,
+		rev, err := s.st.CreateFactRevision(ctx, store.FactRevision{
+			FactID:           fact.ID,
 			Version:          1,
 			Title:            title,
 			Body:             body,
@@ -274,26 +275,27 @@ func (s *Service) acceptProposal(ctx context.Context, p *store.Proposal, actor *
 			ApprovedBy:       &actor.PrincipalID,
 			SourceProposalID: &p.ID,
 			ChangeReason:     "accepted from proposal " + p.ID,
-		}
-		if err := s.st.CreateFactRevision(ctx, *rev); err != nil {
+		})
+		if err != nil {
 			return nil, err
 		}
-		if err := s.st.SetFactCurrentRevision(ctx, f.ID, rev.ID); err != nil {
+		if err := s.st.SetFactCurrentRevision(ctx, fact.ID, rev.ID); err != nil {
 			return nil, err
 		}
 
 		if p.TargetModuleID != nil {
-			place := &store.FactPlacement{
-				FactID:        f.ID,
+			place, err := s.st.CreateFactPlacement(ctx, store.FactPlacement{
+				FactID:        fact.ID,
 				ModuleID:      *p.TargetModuleID,
 				PlacementType: "primary",
 				Status:        "active",
 				ApprovedBy:    &actor.PrincipalID,
 				Reason:        "accepted from proposal " + p.ID,
-			}
-			if err := s.st.CreateFactPlacement(ctx, *place); err != nil {
+			})
+			if err != nil {
 				return nil, err
 			}
+			_ = place
 		}
 	}
 
@@ -431,13 +433,14 @@ func (s *Service) MoveFact(ctx context.Context, in MoveFactInput) (*store.MoveRe
 		RoleUsedTarget:     string(tgtDec.RoleUsed),
 		AdminOverrideUsed:  srcDec.AdminOverride || tgtDec.AdminOverride,
 	}
-	if err := s.st.CreateMoveRequest(ctx, *mr); err != nil {
+	createdMR, err := s.st.CreateMoveRequest(ctx, *mr)
+	if err != nil {
 		return nil, err
 	}
 	_ = s.logEvent(ctx, "fact", in.FactID, "fact.move_proposed", actor, srcDec, map[string]interface{}{
 		"from_module": fromModuleID, "to_module": in.ToModuleID, "reason": in.Reason,
 	}, in.FactID)
-	return mr, nil
+	return createdMR, nil
 }
 
 type ReviewMoveInput struct {
@@ -479,7 +482,7 @@ func (s *Service) ReviewMoveRequest(ctx context.Context, in ReviewMoveInput) (*s
 				ApprovedBy:    &actor.PrincipalID,
 				Reason:        "move accepted from " + mr.FromModuleID,
 			}
-			if err := s.st.CreateFactPlacement(ctx, *tgtPlace); err != nil {
+			if _, err := s.st.CreateFactPlacement(ctx, *tgtPlace); err != nil {
 				return nil, err
 			}
 			placements, err := s.st.GetFactPlacements(ctx, mr.FactID)

@@ -37,19 +37,23 @@ type Proposal struct {
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
-func (s *Store) CreateProposal(ctx context.Context, p Proposal) error {
+func (s *Store) CreateProposal(ctx context.Context, p Proposal) (*Proposal, error) {
 	id := p.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.ExecContext(ctx,
 		`INSERT INTO proposals (id, idempotency_key, submitter_id, source, raw_payload, normalized_text, intent, linked_fact_id, target_module_id, status, mapping_confidence, mapping_explanation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, p.IdempotencyKey, p.SubmitterID, p.Source, p.RawPayload, p.NormalizedText, p.Intent, p.LinkedFactID, p.TargetModuleID, p.Status, p.MappingConfidence, p.MappingExplanation, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339),
+		id, p.IdempotencyKey, p.SubmitterID, p.Source, p.RawPayload, p.NormalizedText, p.Intent, p.LinkedFactID, p.TargetModuleID, p.Status, p.MappingConfidence, p.MappingExplanation, now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("create proposal: %w", err)
+		return nil, fmt.Errorf("create proposal: %w", err)
 	}
-	return nil
+	p.ID = id
+	p.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return &p, nil
 }
 
 func (s *Store) GetProposal(ctx context.Context, id string) (*Proposal, error) {

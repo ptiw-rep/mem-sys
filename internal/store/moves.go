@@ -26,19 +26,22 @@ type MoveRequest struct {
 	ResolvedAt         *string    `json:"resolved_at,omitempty"`
 }
 
-func (s *Store) CreateMoveRequest(ctx context.Context, m MoveRequest) error {
+func (s *Store) CreateMoveRequest(ctx context.Context, m MoveRequest) (*MoveRequest, error) {
 	id := m.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.ExecContext(ctx,
 		`INSERT INTO move_requests (id, fact_id, from_module_id, to_module_id, status, reason, initiated_by, source_approved_by, target_approved_by, role_used_source, role_used_target, admin_override_used, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, m.FactID, m.FromModuleID, m.ToModuleID, m.Status, m.Reason, m.InitiatedBy, m.SourceApprovedBy, m.TargetApprovedBy, m.RoleUsedSource, m.RoleUsedTarget, boolToInt(m.AdminOverrideUsed), time.Now().UTC().Format(time.RFC3339), m.ResolvedAt,
+		id, m.FactID, m.FromModuleID, m.ToModuleID, m.Status, m.Reason, m.InitiatedBy, m.SourceApprovedBy, m.TargetApprovedBy, m.RoleUsedSource, m.RoleUsedTarget, boolToInt(m.AdminOverrideUsed), now, m.ResolvedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("create move request: %w", err)
+		return nil, fmt.Errorf("create move request: %w", err)
 	}
-	return nil
+	m.ID = id
+	m.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	return &m, nil
 }
 
 func (s *Store) GetMoveRequest(ctx context.Context, id string) (*MoveRequest, error) {

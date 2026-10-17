@@ -49,19 +49,23 @@ type FactPlacement struct {
 	ValidTo       *string    `json:"valid_to,omitempty"`
 }
 
-func (s *Store) CreateFact(ctx context.Context, f Fact) error {
+func (s *Store) CreateFact(ctx context.Context, f Fact) (*Fact, error) {
 	id := f.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.ExecContext(ctx,
 		`INSERT INTO facts (id, title, kind, status, current_revision_id, origin_proposal_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, f.Title, f.Kind, f.Status, f.CurrentRevisionID, f.OriginProposalID, f.CreatedBy, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339),
+		id, f.Title, f.Kind, f.Status, f.CurrentRevisionID, f.OriginProposalID, f.CreatedBy, now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("create fact: %w", err)
+		return nil, fmt.Errorf("create fact: %w", err)
 	}
-	return nil
+	f.ID = id
+	f.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	f.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return &f, nil
 }
 
 func (s *Store) GetFact(ctx context.Context, id string) (*Fact, error) {
@@ -150,16 +154,22 @@ func scanFact(row *sql.Row) (*Fact, error) {
 	return &f, nil
 }
 
-func (s *Store) CreateFactRevision(ctx context.Context, r FactRevision) error {
+func (s *Store) CreateFactRevision(ctx context.Context, r FactRevision) (*FactRevision, error) {
 	id := r.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.ExecContext(ctx,
 		`INSERT INTO fact_revisions (id, fact_id, version, title, body, structured_payload, author_id, approved_by, source_proposal_id, change_reason, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, r.FactID, r.Version, r.Title, r.Body, r.StructuredPayload, r.AuthorID, r.ApprovedBy, r.SourceProposalID, r.ChangeReason, r.ContentHash, time.Now().UTC().Format(time.RFC3339),
+		id, r.FactID, r.Version, r.Title, r.Body, r.StructuredPayload, r.AuthorID, r.ApprovedBy, r.SourceProposalID, r.ChangeReason, r.ContentHash, now,
 	)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	r.ID = id
+	r.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	return &r, nil
 }
 
 func (s *Store) GetFactRevision(ctx context.Context, id string) (*FactRevision, error) {
@@ -217,7 +227,7 @@ func scanFactRevision(row *sql.Row) (*FactRevision, error) {
 	return &r, nil
 }
 
-func (s *Store) CreateFactPlacement(ctx context.Context, p FactPlacement) error {
+func (s *Store) CreateFactPlacement(ctx context.Context, p FactPlacement) (*FactPlacement, error) {
 	id := p.ID
 	if id == "" {
 		id = uuid.NewString()
@@ -226,7 +236,11 @@ func (s *Store) CreateFactPlacement(ctx context.Context, p FactPlacement) error 
 		`INSERT INTO fact_placements (id, fact_id, module_id, placement_type, status, proposed_by, approved_by, reason, valid_from, valid_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.FactID, p.ModuleID, p.PlacementType, p.Status, p.ProposedBy, p.ApprovedBy, p.Reason, p.ValidFrom, p.ValidTo,
 	)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	p.ID = id
+	return &p, nil
 }
 
 func (s *Store) GetFactPlacements(ctx context.Context, factID string) ([]FactPlacement, error) {
@@ -238,22 +252,14 @@ func (s *Store) GetFactPlacements(ctx context.Context, factID string) ([]FactPla
 	var out []FactPlacement
 	for rows.Next() {
 		var p FactPlacement
-		var pb, ab, rf, vt string
+		var pb, ab, rf, vt *string
 		if err := rows.Scan(&p.ID, &p.FactID, &p.ModuleID, &p.PlacementType, &p.Status, &pb, &ab, &p.Reason, &rf, &vt); err != nil {
 			return nil, err
 		}
-		if pb != "" {
-			p.ProposedBy = &pb
-		}
-		if ab != "" {
-			p.ApprovedBy = &ab
-		}
-		if rf != "" {
-			p.ValidFrom = &rf
-		}
-		if vt != "" {
-			p.ValidTo = &vt
-		}
+		p.ProposedBy = pb
+		p.ApprovedBy = ab
+		p.ValidFrom = rf
+		p.ValidTo = vt
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -271,24 +277,16 @@ func (s *Store) GetActivePlacementForFactInModule(ctx context.Context, factID, m
 
 func scanFactPlacement(row *sql.Row) (*FactPlacement, error) {
 	var p FactPlacement
-	var pb, ab, rf, vt string
+	var pb, ab, rf, vt *string
 	if err := row.Scan(&p.ID, &p.FactID, &p.ModuleID, &p.PlacementType, &p.Status, &pb, &ab, &p.Reason, &rf, &vt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}
 		return nil, err
 	}
-	if pb != "" {
-		p.ProposedBy = &pb
-	}
-	if ab != "" {
-		p.ApprovedBy = &ab
-	}
-	if rf != "" {
-		p.ValidFrom = &rf
-	}
-	if vt != "" {
-		p.ValidTo = &vt
-	}
+	p.ProposedBy = pb
+	p.ApprovedBy = ab
+	p.ValidFrom = rf
+	p.ValidTo = vt
 	return &p, nil
 }
