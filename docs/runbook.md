@@ -142,7 +142,18 @@ curl -s -H "Authorization: Bearer admin-alice" \
 go test ./...
 ```
 
-Expected: `ok mem-sys/internal/service`.
+Expected:
+```
+ok  mem-sys/internal/http
+ok  mem-sys/internal/service
+```
+
+### Test suites
+
+| Test | File | Covers |
+|---|---|---|
+| `TestMVPFlow` | `internal/service/service_test.go` | Submit → accept → versioned fact → revision → active placement → export → audit events (in-process store + service) |
+| `TestSmokeFlow` | `internal/http/smoke_test.go` | Live HTTP smoke test via `httptest`: `/me`, list modules, submit proposal, owner accept, list facts, fact detail, JSON export, 401 without token, 403 for non-owner review |
 
 ## Stop
 
