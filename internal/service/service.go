@@ -208,7 +208,7 @@ func (s *Service) ReviewProposal(ctx context.Context, in ReviewProposalInput) (*
 	}
 
 	// The actor must be supplied by the handler through context.
-	actor := actorFromCtx(ctx)
+	actor := ActorFromCtx(ctx)
 	if actor == nil {
 		return nil, ErrUnauthorized
 	}
@@ -404,7 +404,7 @@ func (s *Service) MoveFact(ctx context.Context, in MoveFactInput) (*store.MoveRe
 		return nil, ErrBadRequest
 	}
 
-	actor := actorFromCtx(ctx)
+	actor := ActorFromCtx(ctx)
 	if actor == nil {
 		return nil, ErrUnauthorized
 	}
@@ -454,7 +454,7 @@ func (s *Service) ReviewMoveRequest(ctx context.Context, in ReviewMoveInput) (*s
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	actor := actorFromCtx(ctx)
+	actor := ActorFromCtx(ctx)
 	if actor == nil {
 		return nil, ErrUnauthorized
 	}
@@ -592,9 +592,11 @@ func WithActor(ctx context.Context, a *Actor) context.Context {
 	return context.WithValue(ctx, actorCtxKey, a)
 }
 
-func actorFromCtx(ctx context.Context) *Actor {
+func ActorFromCtx(ctx context.Context) *Actor {
 	a, _ := ctx.Value(actorCtxKey).(*Actor)
 	return a
 }
+
+func (s *Service) St() *store.Store { return s.st }
 
 func strPtr(s string) *string { return &s }
