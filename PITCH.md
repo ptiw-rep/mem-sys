@@ -41,22 +41,131 @@ mem-sys is a **governed, versioned knowledge registry** where every fact is:
 │   HTTP REST │  │   MCP       │  │  (Future    │
 │   (chi)     │  │  (stdio)    │  │   UI)       │
 └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       └────────────────┴────────────────┘
-                  ┌──▼──┐
-                  │ API │
-                  │Layer│ AuthN/AuthZ · RBAC · Idempotency
-                  └──┬──┘
+        └────────────────┴────────────────┘
+                   ┌──▼──┐
+                   │ API │
+                   │Layer│ AuthN/AuthZ · RBAC · Idempotency
+                   └──┬──┘
+                      ▼
+         ┌──────────────────────────┐
+         │   Core Domain Service    │
+         │  Proposals · Facts ·     │
+         │  Placements · Moves ·    │
+         │  Modules · Audit · Export│
+         └───────────┬──────────────┘
                      ▼
-        ┌──────────────────────────┐
-        │   Core Domain Service    │
-        │  Proposals · Facts ·     │
-        │  Placements · Moves ·    │
-        │  Modules · Audit · Export│
-        └───────────┬──────────────┘
-                    ▼
-              ┌─────▴─────┐
-              │  SQLite   │  (event log + entities)
-              └───────────┘
+               ┌─────▴─────┐
+               │  SQLite   │  (event log + entities)
+               └───────────┘
+```
+
+### Database Schema (SQLite)
+
+```
+┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
+│   principals    │      │     modules      │      │  module_owners  │
+│─────────────────│      │──────────────────│      │─────────────────│
+│ id PK           │      │ id PK            │      │ module_id FK    │─┐
+│ name            │      │ name (unique)    │      │ principal_id FK │─┼─┐
+│ type            │      │ description      │      │ granted_by      │  │ │
+│ global_role     │      │ repo_id          │      │ granted_at      │  │ │
+│ created_at      │      │ path_patterns    │      └─────────────────┘  │ │
+└─────────────────┘      │ exclude_patterns │                             │ │
+                         │ status           │      ┌─────────────────┐  │ │
+                         │ created_by       │      │   proposals     │  │ │
+                         │ created_at       │      │─────────────────│  │ │
+                         └────────┬─────────┘      │ id PK           │◀─┘ │
+                                  │                 │ idempotency_key │    │ │
+                                  │                 │ submitter_id FK │────┘ │
+                                  │                 │ source          │      │
+                                  │                 │ raw_payload     │      │
+                                  │                 │ normalized_text │      │
+                                  │                 │ intent          │      │
+                                  │                 │ linked_fact_id  │      │
+                                  │                 │ target_module_idFK│─┐  │
+                                  │                 │ status          │  │  │
+                                  │                 │ mapping_conf.   │  │  │
+                                  │                 │ mapping_expl.   │  │  │
+                                  │                 │ created_at      │  │  │
+                                  │                 │ updated_at      │  │  │
+                                  │                 └─────────────────┘  │  │
+                                  │                                      │  │
+                                  │                  ┌─────────────────┐ │  │
+                                  │                  │     facts       │ │  │
+                                  │                  │─────────────────│ │  │
+                                  │                  │ id PK           │ │  │
+                                  │                  │ title           │ │  │
+                                  │                  │ kind            │ │  │
+                                  │                  │ status          │ │  │
+                                  │                  │ current_rev_idFK│─┘ │  │
+                                  │                  │ origin_prop_idFK│────┘ │
+                                  │                  │ created_by FK   │      │
+                                  │                  │ created_at      │      │
+                                  │                  │ updated_at      │      │
+                                  │                  └────────┬────────┘      │
+                                  │                           │                 │
+                                  │      ┌────────────────────┘                 │
+                                  │      │                                      │
+                                  │   ┌──▼───┐                      ┌────────▼────────┐
+                                  │   │fact_ │                      │fact_placements  │
+                                  │   │revis │                      │─────────────────│
+                                  │   │ions  │                      │ id PK           │
+                                  │   │──────│                      │ fact_id FK      │─┐
+                                  │   │ id PK│                      │ module_id FK    │─┼─┐
+                                  │   │ fact_id FK│                 │ placement_type  │  │ │
+                                  │   │ version │                  │ status          │  │ │
+                                  │   │ title   │                  │ proposed_by FK  │  │ │
+                                  │   │ body    │                  │ approved_by     │  │ │
+                                  │   │ author_id FK│              │ reason          │  │ │
+                                  │   │ approved_by│                 │ valid_from      │  │ │
+                                  │   │ source_prop FK│              │ valid_to        │  │ │
+                                  │   │ change_reason│              │ created_at      │  │ │
+                                  │   │ content_hash │              └─────────────────┘  │ │
+                                  │   │ created_at  │                                     │ │
+                                  │   └─────────────┘                                     │ │
+                                  │                                                        │ │
+                                  │   ┌─────────────────┐    ┌─────────────────────┐    │ │
+                                  │   │ facts_anchors   │    │   move_requests     │    │ │
+                                  │   │─────────────────│    │─────────────────────│    │ │
+                                  │   │ id PK           │    │ id PK               │◀───┘ │
+                                  │   │ fact_id FK      │───┘│ fact_id FK          │    │ │
+                                  │   │ revision_id FK  │    │ from_module_id FK   │───┘│ │
+                                  │   │ anchor_type     │    │ to_module_id FK     │────┘│ │
+                                  │   │ path            │    │ status              │    │ │
+                                  │   │ symbol_name     │    │ reason              │    │ │
+                                  │   │ qualified_name  │    │ initiated_by FK     │    │ │
+                                  │   │ signature_hash  │    │ source_approved_byFK│    │ │
+                                  │   │ start/end_line  │    │ target_approved_byFK│    │ │
+                                  │   │ context_hash    │    │ role_used_source    │    │ │
+                                  │   │ confidence      │    │ role_used_target    │    │ │
+                                  │   │ status          │    │ admin_override_used │    │ │
+                                  │   │ created_at      │    │ created_at          │    │ │
+                                  │   │ updated_at      │    │ resolved_at         │    │ │
+                                  │   └─────────────────┘    └─────────────────────┘    │ │
+                                  │                                                        │ │
+                                  │   ┌─────────────────────┐                            │ │
+                                  │   │    event_log        │                            │ │
+                                  │   │─────────────────────│                            │ │
+                                  │   │ id PK               │                            │ │
+                                  │   │ aggregate_type      │                            │ │
+                                  │   │ aggregate_id        │                            │ │
+                                  │   │ actor_id FK         │────────────────────────────┘ │
+                                  │   │ actor_global_role   │                            │ │
+                                  │   │ role_used           │                            │ │
+                                  │   │ admin_override_used │                            │ │
+                                  │   │ action              │                            │ │
+                                  │   │ payload             │                            │ │
+                                  │   │ correlation_id      │                            │ │
+                                  │   │ occurred_at         │                            │ │
+                                  │   └─────────────────────┘                            │ │
+                                  └──────────────────────────────────────────────────────┘
+
+Key relationships:
+- principals 1:N module_owners (many-to-many modules↔principals)
+- modules 1:N proposals, fact_placements, move_requests (from/to)
+- proposals 1:N facts (origin), 1:N move_requests (indirectly via facts)
+- facts 1:N fact_revisions, fact_placements, facts_anchors, move_requests
+- Every mutation is recorded in event_log (actor, role used, admin override)
 ```
 
 - **Go** core server owns truth, workflow, consistency, and audit
@@ -64,7 +173,7 @@ mem-sys is a **governed, versioned knowledge registry** where every fact is:
 - **chi** HTTP router; **MCP** stdio adapter shares the same service layer
 - Layered anchors (symbol → AST → content → path → line) survive refactors
 
-## Why This Wins (Pitch Points)
+## Why This Wins
 
 1. **Knowledge survives refactors** — Facts are decoupled from file paths and line numbers; anchors auto-repair on renames/moves.
 2. **Nothing is silently lost** — Rejected, deprecated, and deleted items are retained (tombstones) with full audit context.
