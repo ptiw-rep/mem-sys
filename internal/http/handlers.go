@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -222,6 +223,40 @@ func (s *Server) handleDecommission(w http.ResponseWriter, r *http.Request) {
 	id := chiParam(r, "module_id")
 	_ = id
 	writeJSON(w, http.StatusOK, envelope{"ok": true, "note": "decommission workflow placeholder"})
+}
+
+// ---- idempotency keys ----
+
+type createIdempotencyKeyReq struct {
+	PrincipalID string `json:"principal_id"`
+	MaxUses     int    `json:"max_uses,omitempty"`
+	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
+}
+
+func (s *Server) handleCreateIdempotencyKey(w http.ResponseWriter, r *http.Request) {
+	a := actor(r)
+	var in createIdempotencyKeyReq
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.PrincipalID == "" {
+		in.PrincipalID = a.PrincipalID
+	}
+	var ttl time.Duration
+	if in.TTLSeconds > 0 {
+		ttl = time.Duration(in.TTLSeconds) * time.Second
+	}
+	key, err := s.svc.GenerateIdempotencyKey(r.Context(), service.GenerateIdempotencyKeyInput{
+		PrincipalID: in.PrincipalID,
+		MaxUses:     in.MaxUses,
+		TTL:         ttl,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, envelope{"idempotency_key": key})
 }
 
 // ---- proposals ----

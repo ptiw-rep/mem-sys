@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"mem-sys/internal/service"
 	"mem-sys/internal/store"
@@ -168,6 +169,8 @@ func (s *Server) toolsCall(req jsonrpcReq) jsonrpcResp {
 		result, err = s.exportModule(ctx, params.Arguments)
 	case "get_anchor_status":
 		result, err = s.getAnchorStatus(ctx, params.Arguments)
+	case "generate_idempotency_key":
+		result, err = s.generateIdempotencyKey(ctx, params.Arguments)
 	default:
 		return jsonrpcResp{JSONRPC: "2.0", ID: req.ID, Error: &jsonrpcErr{Code: -32601, Message: "Unknown tool: " + params.Name}}
 	}
@@ -450,12 +453,39 @@ func (s *Server) getAnchorStatus(ctx context.Context, args json.RawMessage) (int
 	return s.svc.St().ListFactAnchors(ctx, p.FactID)
 }
 
+type generateIdempotencyKeyArgs struct {
+	PrincipalID string `json:"principal_id,omitempty"`
+	MaxUses     int    `json:"max_uses,omitempty"`
+	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
+}
+
+func (s *Server) generateIdempotencyKey(ctx context.Context, args json.RawMessage) (interface{}, error) {
+	var in generateIdempotencyKeyArgs
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, err
+	}
+	actor := service.ActorFromCtx(ctx)
+	principalID := in.PrincipalID
+	if principalID == "" {
+		principalID = actor.PrincipalID
+	}
+	var ttl time.Duration
+	if in.TTLSeconds > 0 {
+		ttl = time.Duration(in.TTLSeconds) * time.Second
+	}
+	return s.svc.GenerateIdempotencyKey(ctx, service.GenerateIdempotencyKeyInput{
+		PrincipalID: principalID,
+		MaxUses:     in.MaxUses,
+		TTL:         ttl,
+	})
+}
+
 func toolsList() []map[string]interface{} {
 	tools := []string{
 		"get_my_roles", "list_modules", "get_module", "list_module_facts", "get_fact",
 		"get_fact_history", "propose_fact", "list_proposals", "get_proposal", "review_proposal",
 		"move_fact", "list_move_requests", "review_move_request", "add_module",
-		"decommission_module", "export_module", "get_anchor_status",
+		"decommission_module", "export_module", "get_anchor_status", "generate_idempotency_key",
 	}
 	out := []map[string]interface{}{}
 	for _, t := range tools {

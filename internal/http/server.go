@@ -51,6 +51,10 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/{proposal_id}/review", s.handleReviewProposal)
 		})
 
+		r.Route("/idempotency-keys", func(r chi.Router) {
+			r.Post("/", s.handleCreateIdempotencyKey)
+		})
+
 		r.Route("/facts", func(r chi.Router) {
 			r.Get("/", s.handleListFacts)
 			r.Get("/{fact_id}", s.handleGetFact)

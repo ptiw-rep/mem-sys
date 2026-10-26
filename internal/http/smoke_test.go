@@ -177,3 +177,51 @@ func TestSmokeFlow(t *testing.T) {
 		t.Fatalf("expected 403 for non-owner review, got %d %s", res.StatusCode, string(body))
 	}
 }
+
+func TestIdempotencyKeyHTTP(t *testing.T) {
+	_, h, _ := smokeServer(t)
+
+	// 1. Create key with explicit principal
+	res, body := do(t, h, "POST", "/api/v1/idempotency-keys", "admin-alice", map[string]interface{}{
+		"principal_id": "user-bob",
+		"max_uses":     2,
+		"ttl_seconds":  3600,
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create key: %d %s", res.StatusCode, string(body))
+	}
+	var keyResp struct {
+		IdempotencyKey struct {
+			Key string `json:"key"`
+		} `json:"idempotency_key"`
+	}
+	if err := json.Unmarshal(body, &keyResp); err != nil {
+		t.Fatalf("parse key response: %v body=%s", err, string(body))
+	}
+	if keyResp.IdempotencyKey.Key == "" {
+		t.Fatal("key is empty")
+	}
+
+	// 2. Create key without principal_id -> defaults to actor (admin-alice)
+	res, body = do(t, h, "POST", "/api/v1/idempotency-keys", "admin-alice", map[string]interface{}{})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create key default principal: %d %s", res.StatusCode, string(body))
+	}
+
+	// 3. Nonexistent principal_id -> 400
+	res, body = do(t, h, "POST", "/api/v1/idempotency-keys", "admin-alice", map[string]interface{}{
+		"principal_id": "nonexistent-user",
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for nonexistent principal, got %d %s", res.StatusCode, string(body))
+	}
+
+	// 4. Invalid max_uses (0 is allowed, defaults to 1)
+	res, body = do(t, h, "POST", "/api/v1/idempotency-keys", "user-bob", map[string]interface{}{
+		"principal_id": "user-bob",
+		"max_uses":     0,
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create key max_uses 0: %d %s", res.StatusCode, string(body))
+	}
+}

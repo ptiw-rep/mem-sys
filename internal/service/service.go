@@ -52,6 +52,8 @@ type AuthzDecision struct {
 
 type Config struct {
 	AdminOverrideRequiresReason bool
+	DefaultIdempotencyTTL       time.Duration
+	DefaultIdempotencyMaxUses   int
 }
 
 type Service struct {
@@ -61,6 +63,12 @@ type Service struct {
 }
 
 func New(st *store.Store, cfg Config) *Service {
+	if cfg.DefaultIdempotencyTTL <= 0 {
+		cfg.DefaultIdempotencyTTL = 24 * time.Hour
+	}
+	if cfg.DefaultIdempotencyMaxUses <= 0 {
+		cfg.DefaultIdempotencyMaxUses = 1
+	}
 	return &Service{st: st, cfg: cfg, now: time.Now}
 }
 
@@ -180,6 +188,29 @@ func (s *Service) CreateProposal(ctx context.Context, in CreateProposalInput) (*
 		return nil, err
 	}
 	return created, nil
+}
+
+type GenerateIdempotencyKeyInput struct {
+	PrincipalID string        `json:"principal_id"`
+	MaxUses     int           `json:"max_uses,omitempty"`
+	TTL         time.Duration `json:"ttl,omitempty"`
+}
+
+func (s *Service) GenerateIdempotencyKey(ctx context.Context, in GenerateIdempotencyKeyInput) (*store.IdempotencyKey, error) {
+	maxUses := in.MaxUses
+	if maxUses <= 0 {
+		maxUses = s.cfg.DefaultIdempotencyMaxUses
+	}
+	ttl := in.TTL
+	if ttl <= 0 {
+		ttl = s.cfg.DefaultIdempotencyTTL
+	}
+
+	return s.st.CreateIdempotencyKey(ctx, store.CreateIdempotencyKeyInput{
+		PrincipalID: in.PrincipalID,
+		MaxUses:     maxUses,
+		TTL:         ttl,
+	})
 }
 
 type ReviewProposalInput struct {

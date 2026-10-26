@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"mem-sys/internal/db"
 	"mem-sys/internal/store"
@@ -120,4 +121,85 @@ func TestMVPFlow(t *testing.T) {
 
 	t.Logf("MVP flow OK: proposal=%s fact=%s revs=%d placements=%d events=%d export=%d bytes",
 		p.ID, f.ID, len(revs), len(placements), len(events), len(data))
+}
+
+func TestIdempotencyKeyFlow(t *testing.T) {
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	st := store.New(d)
+	svc := New(st, Config{AdminOverrideRequiresReason: true})
+	ctx := context.Background()
+
+	// create a principal
+	if err := st.CreatePrincipal(ctx, store.Principal{ID: "user-bob", Name: "Bob", Type: "human", GlobalRole: "user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// generate a key with default TTL and max uses
+	key, err := svc.GenerateIdempotencyKey(ctx, GenerateIdempotencyKeyInput{
+		PrincipalID: "user-bob",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.Key == "" {
+		t.Fatal("key is empty")
+	}
+	if key.PrincipalID != "user-bob" {
+		t.Fatalf("expected principal user-bob, got %s", key.PrincipalID)
+	}
+	if key.MaxUses != 1 {
+		t.Fatalf("expected max_uses 1, got %d", key.MaxUses)
+	}
+	if key.UsedCount != 0 {
+		t.Fatalf("expected used_count 0, got %d", key.UsedCount)
+	}
+	if key.ExpiresAt.IsZero() {
+		t.Fatal("expires_at is zero")
+	}
+
+	// validate and consume
+	consumed, err := st.ValidateAndConsumeIdempotencyKey(ctx, key.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed.UsedCount != 1 {
+		t.Fatalf("expected used_count 1, got %d", consumed.UsedCount)
+	}
+
+	// second consume should fail (max uses reached)
+	_, err = st.ValidateAndConsumeIdempotencyKey(ctx, key.Key)
+	if err == nil {
+		t.Fatal("expected error on second consume (max uses reached)")
+	}
+
+	// nonexistent key should fail
+	_, err = st.ValidateAndConsumeIdempotencyKey(ctx, "nonexistent-key")
+	if err == nil {
+		t.Fatal("expected error on nonexistent key")
+	}
+
+	// custom max uses
+	key2, err := svc.GenerateIdempotencyKey(ctx, GenerateIdempotencyKeyInput{
+		PrincipalID: "user-bob",
+		MaxUses:     3,
+		TTL:         time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key2.MaxUses != 3 {
+		t.Fatalf("expected max_uses 3, got %d", key2.MaxUses)
+	}
+
+	// invalid principal
+	_, err = svc.GenerateIdempotencyKey(ctx, GenerateIdempotencyKeyInput{
+		PrincipalID: "nonexistent",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent principal")
+	}
 }
