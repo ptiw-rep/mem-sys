@@ -2,7 +2,7 @@
 
 **Status:** Proposed (additive extension)  
 **Scope:** New way to submit proposals into mem-sys via pre-filled form URLs  
-**Schema impact:** None (zero migrations, no model changes)  
+**Schema impact:** None for the form itself. A companion additive migration `migrations/002_idempotency_keys.sql` adds the `idempotency_keys` table to support idempotency key generation via `POST /api/v1/idempotency-keys` or the `generate_idempotency_key` MCP tool.  
 **Existing API impact:** None (all current insert/update/delete paths unchanged)
 
 ---
@@ -61,11 +61,12 @@ Supported query params (all optional except `text` recommended):
 
 ### 3.3 Flow
 
-1. **Generate link** (optional convenience): caller hits `GET /api/v1/proposals/link?module_hint=auth&text=...` → receives a JSON object with the full `/form?...` URL.
-2. **Open link:** user/agent opens `/form?module_hint=auth&text=...` in a browser or agent constructs the HTTP request directly.
-3. **Form renders:** context fields (module, file, symbol, text) are shown as read-only pre-filled values.
-4. **Submit:** user confirms/edits and submits → form POSTs to `POST /api/v1/proposals` with the bearer token in the `Authorization` header.
-5. **Existing pipeline runs:** `CreateProposal` → immutable raw proposal → `submitted` status → ready for owner review → accepted → versioned fact. Exactly as today.
+1. **Generate an idempotency key** (optional, prevents duplicate submissions): caller hits `POST /api/v1/idempotency-keys` (HTTP) or `generate_idempotency_key` (MCP) → receives a key string with TTL and max-uses.
+2. **Generate link** (optional convenience): caller hits `GET /api/v1/proposals/link?module_hint=auth&text=...&idempotency_key=<KEY>` → receives a JSON object with the full `/form?...` URL.
+3. **Open link:** user/agent opens `/form?module_hint=auth&text=...` in a browser or agent constructs the HTTP request directly.
+4. **Form renders:** context fields (module, file, symbol, text) are shown as read-only pre-filled values.
+5. **Submit:** user confirms/edits and submits → form POSTs to `POST /api/v1/proposals` with the bearer token in the `Authorization` header and the `idempotency_key`.
+6. **Existing pipeline runs:** `CreateProposal` → immutable raw proposal → `submitted` status → ready for owner review → accepted → versioned fact. Exactly as today.
 
 ### 3.4 Example generated link
 
@@ -158,14 +159,21 @@ Add `TestPreFillLink` and `TestFormPage` in `internal/http/smoke_test.go` (or a 
 ## 7. Example Usage (curl)
 
 ```bash
-# 1. Generate a pre-filled link
-curl -s "http://localhost:8080/api/v1/proposals/link?module_hint=auth&text=Login+rate+limit+5/min&intent=new_fact&idempotency_key=prop-001"
+# 1. Generate an idempotency key (prevents duplicates on retry)
+curl -s -H "Authorization: Bearer user-bob" \
+  -H "Content-Type: application/json" \
+  -d '{"principal_id":"user-bob","max_uses":1,"ttl_seconds":3600}' \
+  http://localhost:8080/api/v1/idempotency-keys
+# => {"idempotency_key":{"key":"prop-login-001",...}}
 
-# 2. Open the returned /form?... URL in a browser, or have an agent POST directly:
+# 2. Generate a pre-filled link using that key
+curl -s "http://localhost:8080/api/v1/proposals/link?module_hint=auth&text=Login+rate+limit+5/min&intent=new_fact&idempotency_key=prop-login-001"
+
+# 3. Open the returned /form?... URL in a browser, or have an agent POST directly:
 curl -s -X POST "http://localhost:8080/api/v1/proposals" \
   -H "Authorization: Bearer user-bob" \
   -H "Content-Type: application/json" \
-  -d '{"text":"Login rate limit 5/min","module_hint":"auth","intent":"new_fact","idempotency_key":"prop-001"}'
+  -d '{"text":"Login rate limit 5/min","module_hint":"auth","intent":"new_fact","idempotency_key":"prop-login-001"}'
 ```
 
 Both produce the same proposal record; the form link is just a friendlier way to construct that request.
@@ -174,8 +182,14 @@ Both produce the same proposal record; the form link is just a friendlier way to
 
 ## 8. Deliverables
 
-1. `internal/http/prefill.go` — `handleGenerateProposalLink` + `handleFormPage`
-2. Routes registered in `internal/http/server.go` (two additive `r.Get` lines)
-3. Tests in `internal/http/prefill_test.go`
-4. Updated `docs/runbook.md` with the new input method
-5. No changes to `migrations/`, `internal/store/`, `internal/service/`, or existing handlers
+1. `migrations/002_idempotency_keys.sql` — `idempotency_keys` table schema
+2. `internal/store/idempotency_keys.go` — `CreateIdempotencyKey`, `GetIdempotencyKey`, `ValidateAndConsumeIdempotencyKey`
+3. `internal/service/service.go` — `GenerateIdempotencyKey` service method + `Config.DefaultIdempotencyTTL` / `Config.DefaultIdempotencyMaxUses`
+4. `internal/http/handlers.go` — `handleCreateIdempotencyKey` (`POST /api/v1/idempotency-keys`)
+5. `internal/http/server.go` — route registration (additive `r.Post`)
+6. `internal/mcp/server.go` — `generate_idempotency_key` tool
+7. `internal/http/prefill.go` — `handleGenerateProposalLink` + `handleFormPage`
+8. Routes registered in `internal/http/server.go` (two additive `r.Get` lines)
+9. Tests: `TestIdempotencyKeyFlow`, `TestIdempotencyKeyHTTP`, `TestPreFillLink`, `TestFormPage`
+10. Updated `docs/runbook.md` and `docs/api.md`
+11. No changes to existing insert/update/delete paths, existing handlers, or `migrations/001_core_mvp.sql`

@@ -33,6 +33,7 @@ mem-sys is a **governed, versioned knowledge registry** where every fact is:
 | Export | JSON / Markdown per module or system-wide |
 | Audit | Append-only event log with role + override recording |
 | RBAC | Global admin + many-to-many module ownership |
+| Idempotency | Server-generated keys with TTL and max-uses (`POST /idempotency-keys`, `generate_idempotency_key` MCP tool) |
 
 ## High-Level Architecture
 
@@ -178,7 +179,7 @@ Key relationships:
 1. **Knowledge survives refactors** — Facts are decoupled from file paths and line numbers; anchors auto-repair on renames/moves.
 2. **Nothing is silently lost** — Rejected, deprecated, and deleted items are retained (tombstones) with full audit context.
 3. **Governance built-in** — Module owners approve facts; admin override is explicit, audited, and reason-required. One person can own many modules and be admin simultaneously without role confusion.
-4. **AI-agent ready** — MCP server + idempotent REST lets agents submit and retrieve knowledge safely.
+4. **AI-agent ready** — MCP server + idempotent REST (with server-generated idempotency keys) lets agents submit and retrieve knowledge safely without duplicate submissions.
 5. **Zero-ops** — Single Go binary + SQLite file. Deploy anywhere.
 6. **Exportable** — JSON/Markdown exports for compliance, onboarding, or context injection into coding agents.
 

@@ -27,7 +27,9 @@ The repo already contains:
 - `docs/architecture.md` — backend architecture
 - `docs/api.md` — REST + MCP API reference
 - `docs/runbook.md` — this file
-- `migrations/001_core_mvp.sql` — SQLite schema
+- `docs/url-prefill-form-plan.md` — pre-filled proposal form link feature plan
+- `migrations/001_core_mvp.sql` — core MVP SQLite schema
+- `migrations/002_idempotency_keys.sql` — idempotency key registry schema
 - `cmd/mem-sys/main.go` — application entrypoint
 - `internal/` — store, service, http, mcp, db layers
 
@@ -98,15 +100,23 @@ curl -s -H "Authorization: Bearer admin-alice" \
   http://localhost:8080/api/v1/modules
 ```
 
-3. **Bob submits a proposal** (capture the `proposal.id` from the response)
+3. **Generate an idempotency key** (optional, prevents duplicate submissions on retry)
 ```bash
 curl -s -H "Authorization: Bearer user-bob" \
   -H "Content-Type: application/json" \
-  -d '{"text":"The login endpoint rate limits users to 5 attempts per minute.","module_hint":"auth","intent":"new_fact","idempotency_key":"prop-001"}' \
+  -d '{"principal_id":"user-bob","max_uses":1,"ttl_seconds":3600}' \
+  http://localhost:8080/api/v1/idempotency-keys
+```
+
+4. **Bob submits a proposal** (capture the `proposal.id` from the response; pass the `idempotency_key` from step 3)
+```bash
+curl -s -H "Authorization: Bearer user-bob" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"The login endpoint rate limits users to 5 attempts per minute.","module_hint":"auth","intent":"new_fact","idempotency_key":"<IDEMPOTENCY_KEY>"}' \
   http://localhost:8080/api/v1/proposals
 ```
 
-4. **Alice (module owner) accepts the proposal**
+5. **Alice (module owner) accepts the proposal**
 ```bash
 curl -s -H "Authorization: Bearer admin-alice" \
   -H "Content-Type: application/json" \
@@ -114,13 +124,13 @@ curl -s -H "Authorization: Bearer admin-alice" \
   http://localhost:8080/api/v1/proposals/<PROPOSAL_ID>/review
 ```
 
-5. **List facts in the auth module**
+6. **List facts in the auth module**
 ```bash
 curl -s -H "Authorization: Bearer admin-alice" \
   http://localhost:8080/api/v1/modules/<MODULE_ID>/facts
 ```
 
-6. **Export module as JSON**
+7. **Export module as JSON**
 ```bash
 curl -s -H "Authorization: Bearer admin-alice" \
   -H "Content-Type: application/json" \
@@ -128,7 +138,7 @@ curl -s -H "Authorization: Bearer admin-alice" \
   http://localhost:8080/api/v1/exports
 ```
 
-7. **Export as Markdown**
+8. **Export as Markdown**
 ```bash
 curl -s -H "Authorization: Bearer admin-alice" \
   -H "Content-Type: application/json" \
@@ -154,6 +164,8 @@ ok  mem-sys/internal/service
 |---|---|---|
 | `TestMVPFlow` | `internal/service/service_test.go` | Submit → accept → versioned fact → revision → active placement → export → audit events (in-process store + service) |
 | `TestSmokeFlow` | `internal/http/smoke_test.go` | Live HTTP smoke test via `httptest`: `/me`, list modules, submit proposal, owner accept, list facts, fact detail, JSON export, 401 without token, 403 for non-owner review |
+| `TestIdempotencyKeyFlow` | `internal/service/service_test.go` | Idempotency key lifecycle: generate, consume, max-uses enforcement, expiry, nonexistent key, custom TTL/max_uses, invalid principal |
+| `TestIdempotencyKeyHTTP` | `internal/http/smoke_test.go` | HTTP endpoint `POST /api/v1/idempotency-keys`: create with explicit principal, default principal (actor), nonexistent principal → 400, max_uses=0 defaults to 1 |
 
 ## Stop
 
@@ -165,6 +177,6 @@ rm -f mem-sys.db   # remove SQLite file to reset state
 ## Notes
 
 - SQLite is single-writer; the store sets `SetMaxOpenConns(1)` for safety in the MVP.
-- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`).
+- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`, `migrations/002_idempotency_keys.sql`).
 - To reset state, delete the `--db` file and restart.
 - No external services (Postgres, vector DB, LLM) are required for the MVP.

@@ -130,7 +130,56 @@ Supported `action` values: `accept`, `accept_with_edits`, `reject`, `duplicate`,
 
 ---
 
-## 4. Facts
+## 4. Idempotency Keys
+
+Idempotency keys are single-use (or limited-use) tokens that prevent duplicate proposal submissions when clients retry. They are generated server-side and then passed to `POST /proposals` (or `propose_fact` MCP tool) via the `idempotency_key` field/header.
+
+### POST /idempotency-keys
+Generate a new idempotency key. The key can then be reused across retries until it expires or reaches its max uses.
+
+**Request**
+```json
+{
+  "principal_id": "user-bob",
+  "max_uses": 1,
+  "ttl_seconds": 3600
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `principal_id` | string | No | authenticated actor | Principal who owns the key |
+| `max_uses` | int | No | `1` | Maximum number of times the key can be consumed |
+| `ttl_seconds` | int | No | `86400` (24h) | Time-to-live in seconds before the key expires |
+
+**Response** (201)
+```json
+{
+  "idempotency_key": {
+    "key": "prop-login-001",
+    "principal_id": "user-bob",
+    "expires_at": "2026-10-18T06:53:20Z",
+    "max_uses": 1,
+    "used_count": 0,
+    "created_at": "2026-10-17T06:53:20Z"
+  }
+}
+```
+
+**Validation rules (corner cases):**
+- `principal_id` must reference an existing principal, otherwise `400`.
+- If `principal_id` is omitted, the authenticated bearer-token principal is used.
+- If `max_uses` is `0` or negative, it defaults to `1`.
+- If `ttl_seconds` is `0` or negative, it defaults to `86400` (24 hours).
+- Once `used_count >= max_uses`, the key can no longer be consumed.
+- Once `expires_at` is in the past, the key can no longer be consumed.
+- A key that does not exist returns `400` on consume.
+
+Idempotency keys are consumed when a proposal is created with that key and a matching proposal already exists (the existing proposal is returned instead of creating a duplicate).
+
+---
+
+## 5. Facts
 
 ### GET /facts
 List all active facts.
@@ -160,7 +209,7 @@ Propose moving a fact to another module. Creates a `MoveRequest` (status `propos
 
 ---
 
-## 5. Move Requests
+## 6. Move Requests
 
 ### POST /move-requests
 Create a move request (same as `POST /facts/{id}/move`).
@@ -184,7 +233,7 @@ On accept: target placement becomes `active`, source placement archived, move re
 
 ---
 
-## 6. Exports
+## 7. Exports
 
 ### POST /exports
 Export module data.
@@ -206,7 +255,7 @@ Export status (inline in MVP).
 
 ---
 
-## Error Responses
+## 8. Error Responses
 
 ```json
 { "error": "unauthorized" }          // 401
@@ -217,7 +266,7 @@ Export status (inline in MVP).
 
 ---
 
-## MCP Interface
+## 9. MCP Interface
 
 Transport: stdio JSON-RPC 2.0. Run with `--mcp`.
 
@@ -248,6 +297,6 @@ Transport: stdio JSON-RPC 2.0. Run with `--mcp`.
 }
 ```
 
-Available tools: `get_my_roles`, `list_modules`, `get_module`, `list_module_facts`, `get_fact`, `get_fact_history`, `propose_fact`, `list_proposals`, `get_proposal`, `review_proposal`, `move_fact`, `list_move_requests`, `review_move_request`, `add_module`, `decommission_module`, `export_module`, `get_anchor_status`.
+Available tools: `get_my_roles`, `list_modules`, `get_module`, `list_module_facts`, `get_fact`, `get_fact_history`, `propose_fact`, `list_proposals`, `get_proposal`, `review_proposal`, `move_fact`, `list_move_requests`, `review_move_request`, `add_module`, `decommission_module`, `export_module`, `get_anchor_status`, `generate_idempotency_key`.
 
 The MCP principal is set via env `MEM_SYS_PRINCIPAL` (default `user-local`).

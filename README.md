@@ -6,7 +6,7 @@ A governed, persistent knowledge/memory system for a changing codebase. Proposal
 
 - Admin creates modules and assigns multiple owners
 - One person can own multiple modules and be admin simultaneously
-- Users/agents submit proposals (idempotent)
+- Users/agents submit proposals (idempotent, with server-generated keys via `POST /idempotency-keys`)
 - Module owners accept / edit-and-accept / reject / reassign proposals
 - Accepted proposals become versioned facts with active placements
 - Facts move between modules via inbound placement (target owner approval)
@@ -27,16 +27,22 @@ Seed data is created automatically:
 - `user-bob` (user)
 - `agent-dev` (agent)
 
-### Example: submit → accept a proposal
+### Example: generate idempotency key → submit → accept a proposal
 
 ```bash
-# Bob submits
+# 1. Generate an idempotency key
 curl -s -H "Authorization: Bearer user-bob" \
   -H "Content-Type: application/json" \
-  -d '{"text":"Login rate limit 5/min","module_hint":"auth","idempotency_key":"p1"}' \
+  -d '{"principal_id":"user-bob","max_uses":1}' \
+  http://localhost:8080/api/v1/idempotency-keys
+
+# 2. Bob submits with the key
+curl -s -H "Authorization: Bearer user-bob" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Login rate limit 5/min","module_hint":"auth","idempotency_key":"<KEY>"}' \
   http://localhost:8080/api/v1/proposals
 
-# Alice (module owner) accepts
+# 3. Alice (module owner) accepts
 curl -s -H "Authorization: Bearer admin-alice" \
   -H "Content-Type: application/json" \
   -d '{"action":"accept","acting_role":"module_owner"}' \
@@ -49,7 +55,7 @@ curl -s -H "Authorization: Bearer admin-alice" \
 MEM_SYS_PRINCIPAL=user-local ./mem-sys --mcp
 ```
 
-JSON-RPC 2.0 over stdio. Tools: `propose_fact`, `review_proposal`, `list_modules`, `get_fact`, `move_fact`, `export_module`, etc.
+JSON-RPC 2.0 over stdio. Tools: `propose_fact`, `review_proposal`, `list_modules`, `get_fact`, `move_fact`, `export_module`, `generate_idempotency_key`, etc.
 
 ## Tests
 
@@ -65,6 +71,7 @@ go test ./...
 | `docs/architecture.md` | Backend architecture |
 | `docs/api.md` | REST + MCP API reference |
 | `docs/runbook.md` | Prerequisites, build, run, examples |
+| `docs/url-prefill-form-plan.md` | Pre-filled proposal form link feature plan |
 
 ## Stack
 

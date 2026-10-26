@@ -40,7 +40,7 @@ The backend is implemented in **Go** with **SQLite** for storage, **chi** for HT
 │  Store Layer  (internal/store)                          │
 │  ├── principals, modules, module_owners                 │
 │  ├── proposals, fact_revisions, fact_placements         │
-│  ├── move_requests, facts_anchors, event_log            │
+│  ├── move_requests, facts_anchors, idempotency_keys, event_log            │
 │  └── SQLite (via database/sql + go-sqlite3)             │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -52,7 +52,7 @@ The backend is implemented in **Go** with **SQLite** for storage, **chi** for HT
 **Service layer** — Core domain logic:
 - `Authenticate` resolves a bearer token (principal ID) into an `Actor` with `global_role` and module-owner grants.
 - `CanReviewModule` computes effective access: owner → `module_owner`; admin not owner → `admin_override` (reason required if configured); otherwise deny.
-- `CreateProposal`, `ReviewProposal`, `MoveFact`, `ReviewMoveRequest`, `ExportModule`.
+- `CreateProposal`, `ReviewProposal`, `MoveFact`, `ReviewMoveRequest`, `ExportModule`, `GenerateIdempotencyKey`.
 
 **Store layer** — Thin CRUD over SQLite. Each entity has create/get/list helpers. `Store.Tx` wraps multi-statement transactions.
 
@@ -69,6 +69,7 @@ The backend is implemented in **Go** with **SQLite** for storage, **chi** for HT
 - `FactPlacement` — id, fact_id, module_id, placement_type, status (active\|inbound_proposed\|archived\|rejected), approved_by
 - `MoveRequest` — id, fact_id, from/to module, status, initiator, approvals, role_used, admin_override flag
 - `FactAnchor` — id, fact_id, anchor_type, path, symbol, status, confidence, …
+- `IdempotencyKey` — id, principal_id, expires_at, max_uses, used_count, created_at (single-use or limited-use tokens to prevent duplicate submissions)
 - `Event` — append-only audit: aggregate_type/id, actor_id, role_used, admin_override_used, action, payload, occurred_at
 
 ## Role & Access Model
@@ -112,7 +113,8 @@ Every mutation records `actor_id`, `actor_global_role`, `role_used`, `module_id`
 mem-sys/
 ├── cmd/mem-sys/main.go          # entrypoint (HTTP or --mcp stdio)
 ├── docs/                        # spec.md + architecture/api/runbook docs
-├── migrations/001_core_mvp.sql  # SQLite schema (applied on startup)
+├── migrations/001_core_mvp.sql  # core MVP SQLite schema
+├── migrations/002_idempotency_keys.sql  # idempotency key registry schema
 ├── go.mod / go.sum
 └── internal/
     ├── db/                      # SQLite connection + migrations
@@ -128,7 +130,7 @@ mem-sys/
 - Authorization enforced in the service layer, not only the handler layer.
 - Admin override requires a reason (configurable).
 - Hard delete is not exposed in MVP; deprecation/archive preferred.
-- Idempotency keys supported on proposal creation.
+- Idempotency keys supported on proposal creation (`POST /idempotency-keys`, `generate_idempotency_key` MCP tool).
 
 ## What's Deferred (post-MVP)
 
