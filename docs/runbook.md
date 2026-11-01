@@ -30,6 +30,7 @@ The repo already contains:
 - `docs/url-prefill-form-plan.md` — pre-filled proposal form link feature plan
 - `migrations/001_core_mvp.sql` — core MVP SQLite schema
 - `migrations/002_idempotency_keys.sql` — idempotency key registry schema
+- `vendor/` — vendored Go dependencies (for offline/air-gapped builds)
 - `cmd/mem-sys/main.go` — application entrypoint
 - `internal/` — store, service, http, mcp, db layers
 
@@ -40,6 +41,35 @@ go build -o mem-sys ./cmd/mem-sys
 ```
 
 Produces a single binary `mem-sys`.
+
+### Air-Gapped / Offline Deployment
+
+The project ships with vendored dependencies (`vendor/`), so you can build on a server with **no internet access**.
+
+**On the air-gapped server:**
+
+```bash
+# Build using only the vendored dependencies — zero downloads needed
+go build -mod=vendor -o mem-sys ./cmd/mem-sys
+```
+
+**Requirement — C compiler (gcc/clang):** The project uses `mattn/go-sqlite3`, which is a CGO package. A C compiler must be present on the machine where you build:
+
+```bash
+# Example
+sudo yum install gcc       # RHEL/CentOS
+# or
+sudo apt-get install build-essential  # Debian/Ubuntu
+```
+
+**Alternative — cross-compile from a connected machine:** If you cannot install a C compiler on the air-gapped server, build the binary on your connected dev machine and copy only the binary:
+
+```bash
+# On your connected dev machine
+GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -mod=vendor -o mem-sys ./cmd/mem-sys
+
+# Copy the resulting `mem-sys` binary to the server — no build tools needed there
+```
 
 ## Run
 

@@ -22,6 +22,20 @@ go build -o mem-sys ./cmd/mem-sys
 ./mem-sys --db mem-sys.db --http :8080
 ```
 
+### Offline / Air-Gapped Deployment
+
+The project includes vendored dependencies (`vendor/`). To build on a server with no internet:
+
+```bash
+go build -mod=vendor -o mem-sys ./cmd/mem-sys
+```
+
+A C compiler (`gcc`/`clang`) is required for the CGO-based SQLite driver. Alternatively, cross-compile from a connected machine and copy only the binary:
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -mod=vendor -o mem-sys ./cmd/mem-sys
+```
+
 Seed data is created automatically:
 - `admin-alice` (admin, owns `auth` module)
 - `user-bob` (user)
