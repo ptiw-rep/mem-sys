@@ -28,6 +28,7 @@ The repo already contains:
 - `docs/api.md` — REST + MCP API reference
 - `docs/runbook.md` — this file
 - `docs/url-prefill-form-plan.md` — pre-filled proposal form link feature plan
+- `tools/module_pattern_gen.md` — module path pattern generator utility
 - `migrations/001_core_mvp.sql` — core MVP SQLite schema
 - `migrations/002_idempotency_keys.sql` — idempotency key registry schema
 - `vendor/` — vendored Go dependencies (for offline/air-gapped builds)

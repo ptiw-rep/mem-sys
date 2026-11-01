@@ -86,6 +86,7 @@ go test ./...
 | `docs/api.md` | REST + MCP API reference |
 | `docs/runbook.md` | Prerequisites, build, run, examples |
 | `docs/url-prefill-form-plan.md` | Pre-filled proposal form link feature plan |
+| `tools/module_pattern_gen.md` | Module path pattern generator utility |
 
 ## Stack
 
