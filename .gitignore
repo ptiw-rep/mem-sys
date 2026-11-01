@@ -25,5 +25,4 @@ Thumbs.db
 
 # Go
 /bin/
-/vendor/
 *.test
