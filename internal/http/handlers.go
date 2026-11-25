@@ -61,11 +61,122 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ---- projects ----
+
+type createProjectReq struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	a := actor(r)
+	if !a.IsAdmin() {
+		writeError(w, http.StatusForbidden, "admin required")
+		return
+	}
+	var in createProjectReq
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if _, err := s.svc.St().GetProjectByName(r.Context(), in.Name); err == nil {
+		writeError(w, http.StatusConflict, "project already exists")
+		return
+	}
+	p, err := s.svc.St().CreateProject(r.Context(), store.Project{
+		Name:        in.Name,
+		Description: in.Description,
+		Status:      "active",
+		CreatedBy:   a.PrincipalID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, envelope{"project": p})
+}
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.svc.St().ListProjects(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"projects": projects})
+}
+
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	id := chiParam(r, "project_id")
+	p, err := s.svc.St().GetProject(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"project": p})
+}
+
+func (s *Server) handleListProjectModules(w http.ResponseWriter, r *http.Request) {
+	id := chiParam(r, "project_id")
+	modules, err := s.svc.St().ListModulesByProject(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"modules": modules})
+}
+
+type setPatternsReq struct {
+	PathPatterns []string `json:"path_patterns"`
+}
+
+func (s *Server) handleSetProjectPatterns(w http.ResponseWriter, r *http.Request) {
+	a := actor(r)
+	if !a.IsAdmin() {
+		writeError(w, http.StatusForbidden, "admin required")
+		return
+	}
+	id := chiParam(r, "project_id")
+	var in setPatternsReq
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.svc.St().GetProject(r.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err := s.svc.St().SetProjectPatterns(r.Context(), id, in.PathPatterns); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Invalidate cached allowlist so next lookup reloads from DB
+	s.svc.InvalidateProjectAllowlist(id)
+	writeJSON(w, http.StatusOK, envelope{"ok": true, "project_id": id, "path_patterns": in.PathPatterns})
+}
+
+func (s *Server) handleGetProjectPatterns(w http.ResponseWriter, r *http.Request) {
+	id := chiParam(r, "project_id")
+	patterns, err := s.svc.St().GetProjectPatterns(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if patterns == nil {
+		patterns = []string{}
+	}
+	writeJSON(w, http.StatusOK, envelope{"project_id": id, "path_patterns": patterns})
+}
+
 // ---- modules ----
 
 type createModuleReq struct {
 	Name            string      `json:"name"`
 	Description     string      `json:"description"`
+	ProjectID       string      `json:"project_id"`
 	PathPatterns    []string    `json:"path_patterns"`
 	ExcludePatterns []string    `json:"exclude_patterns"`
 	OwnerIDs        []string    `json:"owner_ids"`
@@ -87,12 +198,24 @@ func (s *Server) handleCreateModule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name required")
 		return
 	}
+	if in.ProjectID == "" {
+		in.ProjectID = "project-default"
+	}
+	if _, err := s.svc.St().GetProject(r.Context(), in.ProjectID); err != nil {
+		writeError(w, http.StatusBadRequest, "project not found")
+		return
+	}
 	if _, err := s.svc.St().GetModuleByName(r.Context(), in.Name); err == nil {
 		writeError(w, http.StatusConflict, "module already exists")
 		return
 	}
-	// Guard: every path pattern on a new module must be in the allowlist.
-	if al := s.svc.Allowlist(); al != nil {
+	// Guard: every path pattern on a new module must be in the project's allowlist.
+	al, err := s.svc.AllowlistFor(r.Context(), in.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if al != nil {
 		for _, pat := range in.PathPatterns {
 			if !al.PatternAllowed(pat) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("path pattern not in allowlist: %s (allowed: %v)", pat, al.AllowedModules()))
@@ -103,6 +226,7 @@ func (s *Server) handleCreateModule(w http.ResponseWriter, r *http.Request) {
 	mod := store.Module{
 		Name:            in.Name,
 		Description:     in.Description,
+		ProjectID:       in.ProjectID,
 		PathPatterns:    in.PathPatterns,
 		ExcludePatterns: in.ExcludePatterns,
 		Status:          "active",
@@ -240,11 +364,27 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
-	if s.svc.Allowlist() == nil {
-		writeError(w, http.StatusBadRequest, "allowlist not configured")
-		return
+	projectID := r.URL.Query().Get("project_id")
+	var affected []string
+	var err error
+	if projectID != "" {
+		affected, err = s.svc.ReconcileModules(r.Context(), projectID)
+	} else {
+		// Reconcile all projects
+		projects, perr := s.svc.St().ListProjects(r.Context())
+		if perr != nil {
+			writeError(w, http.StatusInternalServerError, perr.Error())
+			return
+		}
+		for _, p := range projects {
+			a2, e := s.svc.ReconcileModules(r.Context(), p.ID)
+			if e != nil {
+				writeError(w, http.StatusInternalServerError, e.Error())
+				return
+			}
+			affected = append(affected, a2...)
+		}
 	}
-	affected, err := s.svc.ReconcileModules(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -253,7 +393,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 		"ok":       true,
 		"affected": affected,
 		"count":    len(affected),
-		"note":     "modules whose path_patterns are no longer in allowlist were set to read_only",
+		"note":     "modules whose path_patterns are no longer in project allowlist were set to read_only",
 	})
 }
 

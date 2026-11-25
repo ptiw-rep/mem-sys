@@ -192,10 +192,17 @@ func TestValidateModulePatterns(t *testing.T) {
 		t.Errorf("expected ErrNotFound for missing module, got: %v", err)
 	}
 
-	// Nil allowlist service should pass everything
+	// Nil allowlist service should pass everything (even if patterns are weird)
 	h2 := newTestServiceNoAllowlist(t)
 	defer h2.close()
-	if err := h2.svc.ValidateModulePatterns(ctx, "any-module"); err != nil {
+	if err := h2.seedPrincipal(ctx, "admin-alice", "Alice", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	mod3, err := h2.seedModule(ctx, "any", []string{"anything/**"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h2.svc.ValidateModulePatterns(ctx, mod3.ID); err != nil {
 		t.Errorf("nil allowlist should not error, got: %v", err)
 	}
 }
@@ -357,4 +364,91 @@ func quoted(strs []string) []string {
 		out[i] = `"` + s + `"`
 	}
 	return out
+}
+
+func TestProjectScopedAllowlists(t *testing.T) {
+	ctx := context.Background()
+	h := newTestServiceNoAllowlist(t)
+	defer h.close()
+
+	// Create two projects
+	p1, err := h.st.CreateProject(ctx, store.Project{Name: "project-a", Description: "A", Status: "active", CreatedBy: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := h.st.CreateProject(ctx, store.Project{Name: "project-b", Description: "B", Status: "active", CreatedBy: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set different patterns per project
+	if err := h.st.SetProjectPatterns(ctx, p1.ID, []string{"services/auth/**"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetProjectPatterns(ctx, p2.ID, []string{"services/billing/**"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed principals and modules
+	if err := h.seedPrincipal(ctx, "admin-alice", "Alice", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	modA := store.Module{Name: "auth-mod", Description: "auth", ProjectID: p1.ID, PathPatterns: []string{"services/auth/**"}, Status: "active", CreatedBy: "admin-alice"}
+	if err := h.st.CreateModule(ctx, modA); err != nil {
+		t.Fatal(err)
+	}
+	modAObj, _ := h.st.GetModuleByName(ctx, "auth-mod")
+
+	modB := store.Module{Name: "billing-mod", Description: "billing", ProjectID: p2.ID, PathPatterns: []string{"services/billing/**"}, Status: "active", CreatedBy: "admin-alice"}
+	if err := h.st.CreateModule(ctx, modB); err != nil {
+		t.Fatal(err)
+	}
+	modBObj, _ := h.st.GetModuleByName(ctx, "billing-mod")
+
+	// auth-mod should be valid in project-a
+	if err := h.svc.ValidateModulePatterns(ctx, modAObj.ID); err != nil {
+		t.Errorf("auth-mod should be valid in project-a, got: %v", err)
+	}
+	// billing-mod should be valid in project-b
+	if err := h.svc.ValidateModulePatterns(ctx, modBObj.ID); err != nil {
+		t.Errorf("billing-mod should be valid in project-b, got: %v", err)
+	}
+
+	// Cross-project: a module with auth pattern in project-b should be invalid
+	modCross := store.Module{Name: "cross-mod", Description: "cross", ProjectID: p2.ID, PathPatterns: []string{"services/auth/**"}, Status: "active", CreatedBy: "admin-alice"}
+	if err := h.st.CreateModule(ctx, modCross); err != nil {
+		t.Fatal(err)
+	}
+	modCrossObj, _ := h.st.GetModuleByName(ctx, "cross-mod")
+	if err := h.svc.ValidateModulePatterns(ctx, modCrossObj.ID); err == nil {
+		t.Error("cross-mod (auth pattern in project-b which allows billing/**) should be invalid")
+	}
+
+	// Reconcile project-a only: should not affect project-b
+	affected, err := h.svc.ReconcileModules(ctx, p1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(affected) != 0 {
+		t.Errorf("expected no affected modules in project-a, got %v", affected)
+	}
+
+	// Change project-a patterns to invalidate auth-mod, then reconcile
+	if err := h.st.SetProjectPatterns(ctx, p1.ID, []string{"services/new/**"}); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.InvalidateProjectAllowlist(p1.ID)
+	affected, err = h.svc.ReconcileModules(ctx, p1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(affected) != 1 || affected[0] != modAObj.ID {
+		t.Errorf("expected auth-mod to be affected in project-a, got %v", affected)
+	}
+	// project-b module should still be active
+	modBAfter, _ := h.st.GetModule(ctx, modBObj.ID)
+	if modBAfter.Status != "active" {
+		t.Errorf("billing-mod in project-b should remain active, got %s", modBAfter.Status)
+	}
 }

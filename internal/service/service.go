@@ -57,10 +57,11 @@ type Config struct {
 }
 
 type Service struct {
-	st        *store.Store
-	cfg       Config
-	now       func() time.Time
-	allowlist *Allowlist
+	st                *store.Store
+	cfg               Config
+	now               func() time.Time
+	projectAllowlists map[string]*Allowlist // projectID -> allowlist
+	globalAllowlist   *Allowlist            // fallback when project has no allowlist
 }
 
 func New(st *store.Store, cfg Config) *Service {
@@ -68,14 +69,15 @@ func New(st *store.Store, cfg Config) *Service {
 	return svc
 }
 
-// NewWithPatterns is like New but loads the module path allowlist from
-// project_pattern.json. When patternFile is empty, no allowlist is enforced
-// (useful for tests and for opting out).
+// NewWithPatterns is like New but loads a global allowlist from
+// project_pattern.json. When patternFile is empty, no global allowlist is
+// enforced (useful for tests and for opting out). Per-project allowlists are
+// loaded from the database (project_patterns table) on demand.
 func NewWithPatterns(st *store.Store, cfg Config, patternFile string) (*Service, error) {
-	var al *Allowlist
+	var globalAL *Allowlist
 	if patternFile != "" {
 		var err error
-		al, err = NewAllowlist(patternFile)
+		globalAL, err = NewAllowlist(patternFile)
 		if err != nil {
 			return nil, err
 		}
@@ -86,12 +88,45 @@ func NewWithPatterns(st *store.Store, cfg Config, patternFile string) (*Service,
 	if cfg.DefaultIdempotencyMaxUses <= 0 {
 		cfg.DefaultIdempotencyMaxUses = 1
 	}
-	return &Service{st: st, cfg: cfg, now: time.Now, allowlist: al}, nil
+	return &Service{
+		st:                st,
+		cfg:               cfg,
+		now:               time.Now,
+		projectAllowlists: make(map[string]*Allowlist),
+		globalAllowlist:   globalAL,
+	}, nil
 }
 
-// Allowlist returns the loaded allowlist, or nil if none was configured.
-func (s *Service) Allowlist() *Allowlist {
-	return s.allowlist
+// AllowlistFor returns the allowlist for the given project. Falls back to the
+// global allowlist if the project has none configured. Returns nil if neither
+// is available (no restriction).
+func (s *Service) AllowlistFor(ctx context.Context, projectID string) (*Allowlist, error) {
+	if al, ok := s.projectAllowlists[projectID]; ok {
+		return al, nil
+	}
+	// Try to load from DB
+	patterns, err := s.st.GetProjectPatterns(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(patterns) > 0 {
+		al := &Allowlist{patterns: patterns}
+		s.projectAllowlists[projectID] = al
+		return al, nil
+	}
+	// Fall back to global
+	return s.globalAllowlist, nil
+}
+
+// GlobalAllowlist returns the global allowlist, or nil if none was configured.
+func (s *Service) GlobalAllowlist() *Allowlist {
+	return s.globalAllowlist
+}
+
+// InvalidateProjectAllowlist clears the cached allowlist for a project so it
+// will be reloaded from the database on next lookup.
+func (s *Service) InvalidateProjectAllowlist(projectID string) {
+	delete(s.projectAllowlists, projectID)
 }
 
 func (s *Service) nowStr() string {
@@ -133,33 +168,39 @@ func (s *Service) CanReviewModule(a *Actor, moduleID string) (*AuthzDecision, er
 }
 
 // ValidateModulePatterns checks that every path pattern on the module is
-// present in the allowlist. Returns a descriptive error listing the first
-// disallowed pattern. Nil allowlist means no restriction.
+// present in its project's allowlist. Returns a descriptive error listing the
+// first disallowed pattern. No allowlist means no restriction.
 func (s *Service) ValidateModulePatterns(ctx context.Context, moduleID string) error {
-	if s.allowlist == nil {
-		return nil
-	}
 	mod, err := s.st.GetModule(ctx, moduleID)
 	if err != nil {
 		return ErrNotFound
 	}
+	al, err := s.AllowlistFor(ctx, mod.ProjectID)
+	if err != nil {
+		return err
+	}
+	if al == nil {
+		return nil
+	}
 	for _, pat := range mod.PathPatterns {
-		if !s.allowlist.PatternAllowed(pat) {
-			return fmt.Errorf("module %q has disallowed path pattern %q (allowed: %v)",
-				moduleID, pat, s.allowlist.AllowedModules())
+		if !al.PatternAllowed(pat) {
+			return fmt.Errorf("module %q (project %q) has disallowed path pattern %q (allowed: %v)",
+				moduleID, mod.ProjectID, pat, al.AllowedModules())
 		}
 	}
 	return nil
 }
 
-// ReconcileModules compares each active module's path_patterns against the
-// allowlist. Modules whose patterns no longer match any allowed pattern are
-// moved to read_only so no new facts can be accepted into them. It returns a
-// list of modules that were affected. This should be run after regenerating
-// project_pattern.json (e.g. on a schedule or after a git sync).
-func (s *Service) ReconcileModules(ctx context.Context) ([]string, error) {
-	if s.allowlist == nil {
-		return nil, nil
+// ReconcileModules compares each active module's path_patterns against its
+// project's allowlist. Modules whose patterns no longer match any allowed
+// pattern are moved to read_only so no new facts can be accepted into them.
+// If projectID is non-empty, only modules in that project are reconciled.
+// It returns a list of affected module IDs. This should be run after
+// regenerating project_pattern.json (e.g. on a schedule or after a git sync).
+func (s *Service) ReconcileModules(ctx context.Context, projectID ...string) ([]string, error) {
+	var targetProject string
+	if len(projectID) > 0 {
+		targetProject = projectID[0]
 	}
 	var affected []string
 	modules, err := s.st.ListModules(ctx)
@@ -170,9 +211,19 @@ func (s *Service) ReconcileModules(ctx context.Context) ([]string, error) {
 		if mod.Status != "active" {
 			continue
 		}
+		if targetProject != "" && mod.ProjectID != targetProject {
+			continue
+		}
+		al, err := s.AllowlistFor(ctx, mod.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if al == nil {
+			continue // no allowlist -> no restriction
+		}
 		allowed := false
 		for _, pat := range mod.PathPatterns {
-			if s.allowlist.PatternAllowed(pat) {
+			if al.PatternAllowed(pat) {
 				allowed = true
 				break
 			}
@@ -185,7 +236,8 @@ func (s *Service) ReconcileModules(ctx context.Context) ([]string, error) {
 			}
 			affected = append(affected, mod.ID)
 			_ = s.logEvent(ctx, "module", mod.ID, "module.drift_detected", nil, nil, map[string]interface{}{
-				"reason":   "path_patterns no longer in allowlist",
+				"reason":   "path_patterns no longer in project allowlist",
+				"project":  mod.ProjectID,
 				"patterns": mod.PathPatterns,
 			}, mod.ID)
 		}
@@ -357,9 +409,9 @@ func (s *Service) ReviewProposal(ctx context.Context, in ReviewProposalInput) (*
 
 func (s *Service) acceptProposal(ctx context.Context, p *store.Proposal, actor *Actor, dec *AuthzDecision, in ReviewProposalInput) (*store.Proposal, error) {
 	// Guard: fact may only be placed into a module whose path patterns are
-	// in the allowlist (project_pattern.json). This prevents a proposal from
-	// being accepted into a module that is no longer authorized.
-	if p.TargetModuleID != nil && s.allowlist != nil {
+	// in the project's allowlist. This prevents a proposal from being accepted
+	// into a module that is no longer authorized.
+	if p.TargetModuleID != nil {
 		if err := s.ValidateModulePatterns(ctx, *p.TargetModuleID); err != nil {
 			return nil, ErrBadRequest
 		}

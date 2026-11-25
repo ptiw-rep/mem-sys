@@ -29,7 +29,55 @@ Returns the authenticated principal's global role and module ownerships.
 
 ---
 
-## 2. Modules
+## 2. Projects
+
+Projects scope modules and their path-pattern allowlists. Each project can have
+its own `project_pattern.json`-style allowlist stored in the database.
+
+### GET /projects
+List all projects.
+
+### POST /projects
+Create a project. **Admin only.**
+
+**Request**
+```json
+{
+  "name": "backend",
+  "description": "Backend services"
+}
+```
+
+### GET /projects/{project_id}
+Get a project.
+
+### GET /projects/{project_id}/modules
+List modules belonging to the project.
+
+### GET /projects/{project_id}/patterns
+Get the project's path-pattern allowlist.
+
+**Response**
+```json
+{
+  "project_id": "proj-123",
+  "path_patterns": ["services/auth/**", "services/billing/**"]
+}
+```
+
+### PUT /projects/{project_id}/patterns
+Set (replace) the project's path-pattern allowlist. **Admin only.**
+
+**Request**
+```json
+{
+  "path_patterns": ["services/auth/**", "services/billing/**"]
+}
+```
+
+---
+
+## 3. Modules
 
 ### GET /modules
 List all modules.
@@ -37,15 +85,17 @@ List all modules.
 ### POST /modules
 Create a module. **Admin only.**
 
-Every `path_patterns` entry must be present in the allowlist loaded from
-`project_pattern.json` (see the `--patterns` startup flag). Patterns that are
-not in the allowlist are rejected with `400`.
+Every `path_patterns` entry must be present in the project's allowlist
+(configured via `PUT /projects/{project_id}/patterns`, or the global
+`project_pattern.json` fallback). Patterns not in the allowlist are rejected
+with `400`. If `project_id` is omitted, it defaults to `project-default`.
 
 **Request**
 ```json
 {
   "name": "auth",
   "description": "Authentication module",
+  "project_id": "proj-123",
   "path_patterns": ["services/auth/**"],
   "exclude_patterns": [],
   "owner_ids": ["admin-alice", "user-bob"]
@@ -77,10 +127,13 @@ Revoke module ownership. Admin only.
 Decommission a module (placeholder in MVP). Admin only.
 
 ### POST /modules/reconcile
-Reconcile all active modules against the allowlist (`project_pattern.json`).
-Modules whose `path_patterns` no longer match any allowed pattern are set to
-`read_only`, preventing new facts from being accepted into them. Returns the
-list of affected module IDs. **Admin only.**
+Reconcile active modules against their project's allowlist. Modules whose
+`path_patterns` no longer match any allowed pattern are set to `read_only`,
+preventing new facts from being accepted into them. Returns the list of
+affected module IDs. **Admin only.**
+
+Optional query param: `project_id` — reconcile only that project. If omitted,
+reconciles all projects.
 
 **Response** (200)
 ```json
@@ -88,13 +141,13 @@ list of affected module IDs. **Admin only.**
   "ok": true,
   "affected": ["module-legacy-id"],
   "count": 1,
-  "note": "modules whose path_patterns are no longer in allowlist were set to read_only"
+  "note": "modules whose path_patterns are no longer in project allowlist were set to read_only"
 }
 ```
 
 ---
 
-## 3. Proposals
+## 4. Proposals
 
 ### POST /proposals
 Submit a proposal. Idempotency via `Idempotency-Key` header or `idempotency_key` body field.
@@ -150,7 +203,7 @@ Supported `action` values: `accept`, `accept_with_edits`, `reject`, `duplicate`,
 
 ---
 
-## 4. Idempotency Keys
+## 5. Idempotency Keys
 
 Idempotency keys are single-use (or limited-use) tokens that prevent duplicate proposal submissions when clients retry. They are generated server-side and then passed to `POST /proposals` (or `propose_fact` MCP tool) via the `idempotency_key` field/header.
 
@@ -199,7 +252,7 @@ Idempotency keys are consumed when a proposal is created with that key and a mat
 
 ---
 
-## 5. Facts
+## 6. Facts
 
 ### GET /facts
 List all active facts.
@@ -229,7 +282,7 @@ Propose moving a fact to another module. Creates a `MoveRequest` (status `propos
 
 ---
 
-## 6. Move Requests
+## 7. Move Requests
 
 ### POST /move-requests
 Create a move request (same as `POST /facts/{id}/move`).
@@ -253,7 +306,7 @@ On accept: target placement becomes `active`, source placement archived, move re
 
 ---
 
-## 7. Exports
+## 8. Exports
 
 ### POST /exports
 Export module data.
@@ -275,7 +328,7 @@ Export status (inline in MVP).
 
 ---
 
-## 8. Error Responses
+## 9. Error Responses
 
 ```json
 { "error": "unauthorized" }          // 401
@@ -286,7 +339,7 @@ Export status (inline in MVP).
 
 ---
 
-## 9. MCP Interface
+## 10. MCP Interface
 
 Transport: stdio JSON-RPC 2.0. Run with `--mcp`.
 

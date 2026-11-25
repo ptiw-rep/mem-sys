@@ -30,6 +30,17 @@ func (s *Server) Routes() http.Handler {
 
 		r.Get("/me", s.handleMe)
 
+		r.Route("/projects", func(r chi.Router) {
+			r.Get("/", s.handleListProjects)
+			r.Post("/", s.handleCreateProject)
+			r.Route("/{project_id}", func(r chi.Router) {
+				r.Get("/", s.handleGetProject)
+				r.Get("/modules", s.handleListProjectModules)
+				r.Get("/patterns", s.handleGetProjectPatterns)
+				r.Put("/patterns", s.handleSetProjectPatterns)
+			})
+		})
+
 		r.Route("/modules", func(r chi.Router) {
 			r.Get("/", s.handleListModules)
 			r.Post("/", s.handleCreateModule)
