@@ -55,21 +55,21 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		roles = append(roles, map[string]string{"module_id": m, "role": "owner"})
 	}
 	writeJSON(w, http.StatusOK, envelope{
-		"principal_id":   a.PrincipalID,
-		"global_role":    a.GlobalRole,
-		"module_roles":   roles,
+		"principal_id": a.PrincipalID,
+		"global_role":  a.GlobalRole,
+		"module_roles": roles,
 	})
 }
 
 // ---- modules ----
 
 type createModuleReq struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	PathPatterns     []string `json:"path_patterns"`
-	ExcludePatterns  []string `json:"exclude_patterns"`
-	OwnerIDs         []string `json:"owner_ids"`
-	ApprovalPolicy   interface{} `json:"approval_policy"`
+	Name            string      `json:"name"`
+	Description     string      `json:"description"`
+	PathPatterns    []string    `json:"path_patterns"`
+	ExcludePatterns []string    `json:"exclude_patterns"`
+	OwnerIDs        []string    `json:"owner_ids"`
+	ApprovalPolicy  interface{} `json:"approval_policy"`
 }
 
 func (s *Server) handleCreateModule(w http.ResponseWriter, r *http.Request) {
@@ -91,13 +91,22 @@ func (s *Server) handleCreateModule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "module already exists")
 		return
 	}
+	// Guard: every path pattern on a new module must be in the allowlist.
+	if al := s.svc.Allowlist(); al != nil {
+		for _, pat := range in.PathPatterns {
+			if !al.PatternAllowed(pat) {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("path pattern not in allowlist: %s (allowed: %v)", pat, al.AllowedModules()))
+				return
+			}
+		}
+	}
 	mod := store.Module{
-		Name:             in.Name,
-		Description:      in.Description,
-		PathPatterns:     in.PathPatterns,
-		ExcludePatterns:  in.ExcludePatterns,
-		Status:           "active",
-		CreatedBy:        a.PrincipalID,
+		Name:            in.Name,
+		Description:     in.Description,
+		PathPatterns:    in.PathPatterns,
+		ExcludePatterns: in.ExcludePatterns,
+		Status:          "active",
+		CreatedBy:       a.PrincipalID,
 	}
 	if err := s.svc.St().CreateModule(r.Context(), mod); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -225,6 +234,29 @@ func (s *Server) handleDecommission(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{"ok": true, "note": "decommission workflow placeholder"})
 }
 
+func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	a := actor(r)
+	if !a.IsAdmin() {
+		writeError(w, http.StatusForbidden, "admin required")
+		return
+	}
+	if s.svc.Allowlist() == nil {
+		writeError(w, http.StatusBadRequest, "allowlist not configured")
+		return
+	}
+	affected, err := s.svc.ReconcileModules(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{
+		"ok":       true,
+		"affected": affected,
+		"count":    len(affected),
+		"note":     "modules whose path_patterns are no longer in allowlist were set to read_only",
+	})
+}
+
 // ---- idempotency keys ----
 
 type createIdempotencyKeyReq struct {
@@ -295,15 +327,15 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p, err := s.svc.CreateProposal(r.Context(), service.CreateProposalInput{
-		SubmitterID:         a.PrincipalID,
-		Source:              "http",
-		RawPayload:          text,
-		NormalizedText:      text,
-		Intent:              intent,
-		TargetModuleID:      targetModuleID,
-		MappingConfidence:   in.MappingConfidence,
-		MappingExplanation:  in.MappingExplanation,
-		IdempotencyKey:      in.IdempotencyKey,
+		SubmitterID:        a.PrincipalID,
+		Source:             "http",
+		RawPayload:         text,
+		NormalizedText:     text,
+		Intent:             intent,
+		TargetModuleID:     targetModuleID,
+		MappingConfidence:  in.MappingConfidence,
+		MappingExplanation: in.MappingExplanation,
+		IdempotencyKey:     in.IdempotencyKey,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -341,14 +373,14 @@ func (s *Server) handleGetProposal(w http.ResponseWriter, r *http.Request) {
 }
 
 type reviewProposalReq struct {
-	Action               string  `json:"action"`
-	Comment              string  `json:"comment"`
-	EditedTitle          string  `json:"edited_title"`
-	EditedBody           string  `json:"edited_body"`
-	ActingRole           string  `json:"acting_role"`
-	UseAdminOverride     bool    `json:"use_admin_override"`
-	AdminOverrideReason  string  `json:"admin_override_reason"`
-	NewModuleID          string  `json:"new_module_id"`
+	Action              string `json:"action"`
+	Comment             string `json:"comment"`
+	EditedTitle         string `json:"edited_title"`
+	EditedBody          string `json:"edited_body"`
+	ActingRole          string `json:"acting_role"`
+	UseAdminOverride    bool   `json:"use_admin_override"`
+	AdminOverrideReason string `json:"admin_override_reason"`
+	NewModuleID         string `json:"new_module_id"`
 }
 
 func (s *Server) handleReviewProposal(w http.ResponseWriter, r *http.Request) {
@@ -412,10 +444,10 @@ func (s *Server) handleGetFact(w http.ResponseWriter, r *http.Request) {
 	placements, _ := s.svc.St().GetFactPlacements(r.Context(), id)
 	anchors, _ := s.svc.St().ListFactAnchors(r.Context(), id)
 	writeJSON(w, http.StatusOK, envelope{
-		"fact":        f,
-		"revisions":   revisions,
-		"placements":  placements,
-		"anchors":     anchors,
+		"fact":       f,
+		"revisions":  revisions,
+		"placements": placements,
+		"anchors":    anchors,
 	})
 }
 
@@ -448,9 +480,9 @@ func (s *Server) handleArchiveFact(w http.ResponseWriter, r *http.Request) {
 }
 
 type moveFactReq struct {
-	ToModuleID         string `json:"to_module_id"`
-	Reason             string `json:"reason"`
-	UseAdminOverride   bool   `json:"use_admin_override"`
+	ToModuleID          string `json:"to_module_id"`
+	Reason              string `json:"reason"`
+	UseAdminOverride    bool   `json:"use_admin_override"`
 	AdminOverrideReason string `json:"admin_override_reason"`
 }
 
@@ -463,12 +495,12 @@ func (s *Server) handleMoveFact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mr, err := s.svc.MoveFact(r.Context(), service.MoveFactInput{
-		FactID:               id,
-		ToModuleID:           in.ToModuleID,
-		Reason:               in.Reason,
-		InitiatedBy:          a.PrincipalID,
-		UseAdminOverride:     in.UseAdminOverride,
-		AdminOverrideReason:  in.AdminOverrideReason,
+		FactID:              id,
+		ToModuleID:          in.ToModuleID,
+		Reason:              in.Reason,
+		InitiatedBy:         a.PrincipalID,
+		UseAdminOverride:    in.UseAdminOverride,
+		AdminOverrideReason: in.AdminOverrideReason,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -493,9 +525,9 @@ func (s *Server) handleCreateMoveRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	mr, err := s.svc.MoveFact(r.Context(), service.MoveFactInput{
-		FactID:     in.FactID,
-		ToModuleID: in.ToModuleID,
-		Reason:     in.Reason,
+		FactID:      in.FactID,
+		ToModuleID:  in.ToModuleID,
+		Reason:      in.Reason,
 		InitiatedBy: a.PrincipalID,
 	})
 	if err != nil {
@@ -516,10 +548,10 @@ func (s *Server) handleGetMoveRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 type reviewMoveReq struct {
-	Action                string `json:"action"`
-	Comment               string `json:"comment"`
-	UseAdminOverride      bool   `json:"use_admin_override"`
-	AdminOverrideReason   string `json:"admin_override_reason"`
+	Action              string `json:"action"`
+	Comment             string `json:"comment"`
+	UseAdminOverride    bool   `json:"use_admin_override"`
+	AdminOverrideReason string `json:"admin_override_reason"`
 }
 
 func (s *Server) handleReviewMoveRequest(w http.ResponseWriter, r *http.Request) {

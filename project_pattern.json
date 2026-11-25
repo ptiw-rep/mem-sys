@@ -1,0 +1,14 @@
+{
+  "root": "/home/paras/dev/mem-sys",
+  "module_count": 8,
+  "path_patterns": [
+    "**",
+    "cmd/mem-sys/**",
+    "internal/db/**",
+    "internal/http/**",
+    "internal/mcp/**",
+    "internal/service/**",
+    "internal/store/**",
+    "tools/**"
+  ]
+}

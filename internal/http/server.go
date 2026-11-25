@@ -44,6 +44,8 @@ func (s *Server) Routes() http.Handler {
 			})
 		})
 
+		r.Post("/modules/reconcile", s.handleReconcile)
+
 		r.Route("/proposals", func(r chi.Router) {
 			r.Post("/", s.handleCreateProposal)
 			r.Get("/", s.handleListProposals)

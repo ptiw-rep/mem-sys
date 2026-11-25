@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrUnauthorized  = errors.New("unauthorized")
-	ErrForbidden     = errors.New("forbidden")
-	ErrBadRequest    = errors.New("bad request")
-	ErrConflict      = errors.New("conflict")
+	ErrNotFound     = errors.New("not found")
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+	ErrBadRequest   = errors.New("bad request")
+	ErrConflict     = errors.New("conflict")
 )
 
 type RoleUsed string
@@ -28,9 +28,9 @@ const (
 )
 
 type Actor struct {
-	PrincipalID   string
-	GlobalRole    string
-	ModuleRoles   map[string]bool // module_id -> is owner
+	PrincipalID string
+	GlobalRole  string
+	ModuleRoles map[string]bool // module_id -> is owner
 }
 
 func (a *Actor) IsAdmin() bool {
@@ -43,11 +43,11 @@ func (a *Actor) IsOwnerOf(moduleID string) bool {
 
 // AuthzDecision captures how an action was authorized for audit.
 type AuthzDecision struct {
-	RoleUsed         RoleUsed
-	AdminOverride    bool
-	Reason           string
-	ModuleID         string
-	ActorGlobalRole  string
+	RoleUsed        RoleUsed
+	AdminOverride   bool
+	Reason          string
+	ModuleID        string
+	ActorGlobalRole string
 }
 
 type Config struct {
@@ -57,19 +57,41 @@ type Config struct {
 }
 
 type Service struct {
-	st   *store.Store
-	cfg  Config
-	now  func() time.Time
+	st        *store.Store
+	cfg       Config
+	now       func() time.Time
+	allowlist *Allowlist
 }
 
 func New(st *store.Store, cfg Config) *Service {
+	svc, _ := NewWithPatterns(st, cfg, "")
+	return svc
+}
+
+// NewWithPatterns is like New but loads the module path allowlist from
+// project_pattern.json. When patternFile is empty, no allowlist is enforced
+// (useful for tests and for opting out).
+func NewWithPatterns(st *store.Store, cfg Config, patternFile string) (*Service, error) {
+	var al *Allowlist
+	if patternFile != "" {
+		var err error
+		al, err = NewAllowlist(patternFile)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if cfg.DefaultIdempotencyTTL <= 0 {
 		cfg.DefaultIdempotencyTTL = 24 * time.Hour
 	}
 	if cfg.DefaultIdempotencyMaxUses <= 0 {
 		cfg.DefaultIdempotencyMaxUses = 1
 	}
-	return &Service{st: st, cfg: cfg, now: time.Now}
+	return &Service{st: st, cfg: cfg, now: time.Now, allowlist: al}, nil
+}
+
+// Allowlist returns the loaded allowlist, or nil if none was configured.
+func (s *Service) Allowlist() *Allowlist {
+	return s.allowlist
 }
 
 func (s *Service) nowStr() string {
@@ -110,6 +132,67 @@ func (s *Service) CanReviewModule(a *Actor, moduleID string) (*AuthzDecision, er
 	return nil, ErrForbidden
 }
 
+// ValidateModulePatterns checks that every path pattern on the module is
+// present in the allowlist. Returns a descriptive error listing the first
+// disallowed pattern. Nil allowlist means no restriction.
+func (s *Service) ValidateModulePatterns(ctx context.Context, moduleID string) error {
+	if s.allowlist == nil {
+		return nil
+	}
+	mod, err := s.st.GetModule(ctx, moduleID)
+	if err != nil {
+		return ErrNotFound
+	}
+	for _, pat := range mod.PathPatterns {
+		if !s.allowlist.PatternAllowed(pat) {
+			return fmt.Errorf("module %q has disallowed path pattern %q (allowed: %v)",
+				moduleID, pat, s.allowlist.AllowedModules())
+		}
+	}
+	return nil
+}
+
+// ReconcileModules compares each active module's path_patterns against the
+// allowlist. Modules whose patterns no longer match any allowed pattern are
+// moved to read_only so no new facts can be accepted into them. It returns a
+// list of modules that were affected. This should be run after regenerating
+// project_pattern.json (e.g. on a schedule or after a git sync).
+func (s *Service) ReconcileModules(ctx context.Context) ([]string, error) {
+	if s.allowlist == nil {
+		return nil, nil
+	}
+	var affected []string
+	modules, err := s.st.ListModules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, mod := range modules {
+		if mod.Status != "active" {
+			continue
+		}
+		allowed := false
+		for _, pat := range mod.PathPatterns {
+			if s.allowlist.PatternAllowed(pat) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			if err := s.st.PatchModule(ctx, mod.ID, map[string]interface{}{
+				"status": "read_only",
+			}); err != nil {
+				return nil, err
+			}
+			affected = append(affected, mod.ID)
+			_ = s.logEvent(ctx, "module", mod.ID, "module.drift_detected", nil, nil, map[string]interface{}{
+				"reason":   "path_patterns no longer in allowlist",
+				"patterns": mod.PathPatterns,
+			}, mod.ID)
+		}
+	}
+	return affected, nil
+}
+
 func (s *Service) GetActorModuleRoles(ctx context.Context, a *Actor) ([]store.Principal, error) {
 	return nil, nil
 }
@@ -126,52 +209,54 @@ func (s *Service) logEvent(ctx context.Context, aggregateType, aggregateID, acti
 		roleUsed = dec.RoleUsed
 		adminOverride = dec.AdminOverride
 	}
-	actorRole := a.GlobalRole
-	if a == nil {
-		actorRole = "system"
+	actorID := "system"
+	actorRole := "system"
+	if a != nil {
+		actorID = a.PrincipalID
+		actorRole = a.GlobalRole
 	}
 	return s.st.AppendEvent(ctx, store.Event{
-		AggregateType:       aggregateType,
-		AggregateID:         aggregateID,
-		ActorID:             a.PrincipalID,
-		ActorGlobalRole:     actorRole,
-		RoleUsed:            string(roleUsed),
-		AdminOverrideUsed:   adminOverride,
-		Action:              action,
-		Payload:             payload(pay),
-		CorrelationID:       correlationID,
-		OccurredAt:          s.nowStr(),
+		AggregateType:     aggregateType,
+		AggregateID:       aggregateID,
+		ActorID:           actorID,
+		ActorGlobalRole:   actorRole,
+		RoleUsed:          string(roleUsed),
+		AdminOverrideUsed: adminOverride,
+		Action:            action,
+		Payload:           payload(pay),
+		CorrelationID:     correlationID,
+		OccurredAt:        s.nowStr(),
 	})
 }
 
 // ---------------- Proposals ----------------
 
 type CreateProposalInput struct {
-	SubmitterID          string
-	Source               string
-	RawPayload           string
-	NormalizedText       string
-	Intent               store.ProposalIntent
-	LinkedFactID         *string
-	TargetModuleID       *string
-	MappingConfidence    float64
-	MappingExplanation   string
-	IdempotencyKey       string
+	SubmitterID        string
+	Source             string
+	RawPayload         string
+	NormalizedText     string
+	Intent             store.ProposalIntent
+	LinkedFactID       *string
+	TargetModuleID     *string
+	MappingConfidence  float64
+	MappingExplanation string
+	IdempotencyKey     string
 }
 
 func (s *Service) CreateProposal(ctx context.Context, in CreateProposalInput) (*store.Proposal, error) {
 	p := &store.Proposal{
-		IdempotencyKey:      in.IdempotencyKey,
-		SubmitterID:         in.SubmitterID,
-		Source:              in.Source,
-		RawPayload:          in.RawPayload,
-		NormalizedText:      in.NormalizedText,
-		Intent:              in.Intent,
-		LinkedFactID:        in.LinkedFactID,
-		TargetModuleID:      in.TargetModuleID,
-		Status:              "submitted",
-		MappingConfidence:   in.MappingConfidence,
-		MappingExplanation:  in.MappingExplanation,
+		IdempotencyKey:     in.IdempotencyKey,
+		SubmitterID:        in.SubmitterID,
+		Source:             in.Source,
+		RawPayload:         in.RawPayload,
+		NormalizedText:     in.NormalizedText,
+		Intent:             in.Intent,
+		LinkedFactID:       in.LinkedFactID,
+		TargetModuleID:     in.TargetModuleID,
+		Status:             "submitted",
+		MappingConfidence:  in.MappingConfidence,
+		MappingExplanation: in.MappingExplanation,
 	}
 	created, err := s.st.CreateProposal(ctx, *p)
 	if err != nil {
@@ -214,15 +299,15 @@ func (s *Service) GenerateIdempotencyKey(ctx context.Context, in GenerateIdempot
 }
 
 type ReviewProposalInput struct {
-	ProposalID           string
-	Action               string // accept, accept_with_edits, reject, duplicate, reassign, request_clarification
-	Comment              string
-	EditedTitle          string
-	EditedBody           string
-	ActingRole           string // module_owner | admin
-	UseAdminOverride     bool
-	AdminOverrideReason  string
-	NewModuleID          *string // for reassign
+	ProposalID          string
+	Action              string // accept, accept_with_edits, reject, duplicate, reassign, request_clarification
+	Comment             string
+	EditedTitle         string
+	EditedBody          string
+	ActingRole          string // module_owner | admin
+	UseAdminOverride    bool
+	AdminOverrideReason string
+	NewModuleID         *string // for reassign
 }
 
 func (s *Service) ReviewProposal(ctx context.Context, in ReviewProposalInput) (*store.Proposal, error) {
@@ -235,7 +320,7 @@ func (s *Service) ReviewProposal(ctx context.Context, in ReviewProposalInput) (*
 	if in.NewModuleID != nil {
 		targetModuleID = in.NewModuleID
 	}
-	if 	targetModuleID == nil {
+	if targetModuleID == nil {
 		return nil, ErrBadRequest
 	}
 
@@ -271,6 +356,15 @@ func (s *Service) ReviewProposal(ctx context.Context, in ReviewProposalInput) (*
 }
 
 func (s *Service) acceptProposal(ctx context.Context, p *store.Proposal, actor *Actor, dec *AuthzDecision, in ReviewProposalInput) (*store.Proposal, error) {
+	// Guard: fact may only be placed into a module whose path patterns are
+	// in the allowlist (project_pattern.json). This prevents a proposal from
+	// being accepted into a module that is no longer authorized.
+	if p.TargetModuleID != nil && s.allowlist != nil {
+		if err := s.ValidateModulePatterns(ctx, *p.TargetModuleID); err != nil {
+			return nil, ErrBadRequest
+		}
+	}
+
 	title := in.EditedTitle
 	body := in.EditedBody
 	if title == "" {
@@ -286,11 +380,11 @@ func (s *Service) acceptProposal(ctx context.Context, p *store.Proposal, actor *
 	factID := ""
 	{
 		fact, err := s.st.CreateFact(ctx, store.Fact{
-			Title:           title,
-			Kind:            "other",
-			Status:          "active",
+			Title:            title,
+			Kind:             "other",
+			Status:           "active",
 			OriginProposalID: &p.ID,
-			CreatedBy:       actor.PrincipalID,
+			CreatedBy:        actor.PrincipalID,
 		})
 		if err != nil {
 			return nil, err
@@ -403,15 +497,15 @@ func (s *Service) requestClarification(ctx context.Context, p *store.Proposal, a
 // ---------------- Facts: move ----------------
 
 type MoveFactInput struct {
-	FactID               string
-	ToModuleID           string
-	Reason               string
-	InitiatedBy          string
-	ActingRole           string
-	UseAdminOverride     bool
-	AdminOverrideReason  string
-	SourceRole           string
-	TargetRole           string
+	FactID              string
+	ToModuleID          string
+	Reason              string
+	InitiatedBy         string
+	ActingRole          string
+	UseAdminOverride    bool
+	AdminOverrideReason string
+	SourceRole          string
+	TargetRole          string
 }
 
 func (s *Service) MoveFact(ctx context.Context, in MoveFactInput) (*store.MoveRequest, error) {
@@ -454,15 +548,15 @@ func (s *Service) MoveFact(ctx context.Context, in MoveFactInput) (*store.MoveRe
 	}
 
 	mr := &store.MoveRequest{
-		FactID:             in.FactID,
-		FromModuleID:       fromModuleID,
-		ToModuleID:         in.ToModuleID,
-		Status:             "proposed",
-		Reason:             in.Reason,
-		InitiatedBy:        actor.PrincipalID,
-		RoleUsedSource:     string(srcDec.RoleUsed),
-		RoleUsedTarget:     string(tgtDec.RoleUsed),
-		AdminOverrideUsed:  srcDec.AdminOverride || tgtDec.AdminOverride,
+		FactID:            in.FactID,
+		FromModuleID:      fromModuleID,
+		ToModuleID:        in.ToModuleID,
+		Status:            "proposed",
+		Reason:            in.Reason,
+		InitiatedBy:       actor.PrincipalID,
+		RoleUsedSource:    string(srcDec.RoleUsed),
+		RoleUsedTarget:    string(tgtDec.RoleUsed),
+		AdminOverrideUsed: srcDec.AdminOverride || tgtDec.AdminOverride,
 	}
 	createdMR, err := s.st.CreateMoveRequest(ctx, *mr)
 	if err != nil {
@@ -475,12 +569,12 @@ func (s *Service) MoveFact(ctx context.Context, in MoveFactInput) (*store.MoveRe
 }
 
 type ReviewMoveInput struct {
-	MoveRequestID        string
-	Action               string // accept or reject (target side)
-	Comment              string
-	ActingRole           string
-	UseAdminOverride     bool
-	AdminOverrideReason  string
+	MoveRequestID       string
+	Action              string // accept or reject (target side)
+	Comment             string
+	ActingRole          string
+	UseAdminOverride    bool
+	AdminOverrideReason string
 }
 
 func (s *Service) ReviewMoveRequest(ctx context.Context, in ReviewMoveInput) (*store.MoveRequest, error) {
@@ -552,8 +646,8 @@ func (s *Service) ReviewMoveRequest(ctx context.Context, in ReviewMoveInput) (*s
 // ---------------- Export ----------------
 
 type ExportScope struct {
-	ModuleID  string
-	Format    string // json | markdown
+	ModuleID string
+	Format   string // json | markdown
 }
 
 func (s *Service) ExportModule(ctx context.Context, scope ExportScope) ([]byte, error) {
@@ -580,10 +674,10 @@ func (s *Service) ExportModule(ctx context.Context, scope ExportScope) ([]byte, 
 
 func exportJSON(mod *store.Module, facts []store.Fact, proposals []store.Proposal) ([]byte, error) {
 	type factOut struct {
-		ID        string `json:"id"`
-		Title     string `json:"title"`
-		Kind      string `json:"kind"`
-		Status    string `json:"status"`
+		ID        string               `json:"id"`
+		Title     string               `json:"title"`
+		Kind      string               `json:"kind"`
+		Status    string               `json:"status"`
 		Revisions []store.FactRevision `json:"revisions"`
 	}
 	out := map[string]interface{}{

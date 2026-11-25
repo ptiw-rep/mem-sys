@@ -8,8 +8,8 @@ import (
 	"os"
 
 	"mem-sys/internal/db"
-	"mem-sys/internal/mcp"
 	memhttp "mem-sys/internal/http"
+	"mem-sys/internal/mcp"
 	"mem-sys/internal/service"
 	"mem-sys/internal/store"
 )
@@ -18,6 +18,7 @@ func main() {
 	dbPath := flag.String("db", "mem-sys.db", "SQLite database path")
 	httpAddr := flag.String("http", "localhost:8080", "HTTP listen address")
 	mcpMode := flag.Bool("mcp", false, "Run as MCP stdio server")
+	patternsFile := flag.String("patterns", "project_pattern.json", "Path to project_pattern.json allowlist (empty disables allowlist)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -30,7 +31,11 @@ func main() {
 	defer d.Close()
 
 	st := store.New(d)
-	svc := service.New(st, service.Config{AdminOverrideRequiresReason: true})
+	svc, err := service.NewWithPatterns(st, service.Config{AdminOverrideRequiresReason: true}, *patternsFile)
+	if err != nil {
+		log.Error("new service", "err", err)
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	if err := seed(ctx, svc); err != nil {
