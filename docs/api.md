@@ -37,6 +37,10 @@ List all modules.
 ### POST /modules
 Create a module. **Admin only.**
 
+Every `path_patterns` entry must be present in the allowlist loaded from
+`project_pattern.json` (see the `--patterns` startup flag). Patterns that are
+not in the allowlist are rejected with `400`.
+
 **Request**
 ```json
 {
@@ -71,6 +75,22 @@ Revoke module ownership. Admin only.
 
 ### POST /modules/{module_id}/decommission
 Decommission a module (placeholder in MVP). Admin only.
+
+### POST /modules/reconcile
+Reconcile all active modules against the allowlist (`project_pattern.json`).
+Modules whose `path_patterns` no longer match any allowed pattern are set to
+`read_only`, preventing new facts from being accepted into them. Returns the
+list of affected module IDs. **Admin only.**
+
+**Response** (200)
+```json
+{
+  "ok": true,
+  "affected": ["module-legacy-id"],
+  "count": 1,
+  "note": "modules whose path_patterns are no longer in allowlist were set to read_only"
+}
+```
 
 ---
 

@@ -113,6 +113,31 @@ curl -s -H "Authorization: Bearer admin-alice" \
 
 You can also generate patterns for multiple modules and post them individually, or hand-edit the JSON before submitting.
 
+## Using the output as the module path allowlist
+
+Save the generated JSON as `project_pattern.json` and pass it to mem-sys at
+startup via the `--patterns` flag. The service loads it as an allowlist:
+
+```bash
+python3 tools/module_pattern_gen.py /path/to/codebase \
+  --exclude .git --exclude vendor \
+  -o project_pattern.json
+
+./mem-sys --db mem-sys.db --http :8080 --patterns project_pattern.json
+```
+
+When the allowlist is configured:
+
+- **Module creation** rejects any `path_patterns` not in the allowlist.
+- **Fact acceptance** validates that the target module's patterns are still
+  allowed; disallowed modules block new facts.
+- Run `POST /api/v1/modules/reconcile` (admin only) after regenerating
+  `project_pattern.json` to set drift-affected modules to `read_only` without
+  deleting existing facts.
+
+See `docs/runbook.md` (Module Path Allowlist & Pattern Drift) for the full
+drift-handling workflow.
+
 ## Limitations
 
 - The script heuristically detects module roots; it does not parse actual import graphs or language-specific module systems.
