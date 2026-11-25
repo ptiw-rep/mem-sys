@@ -200,6 +200,16 @@ ok  mem-sys/internal/service
 | `TestSmokeFlow` | `internal/http/smoke_test.go` | Live HTTP smoke test via `httptest`: `/me`, list modules, submit proposal, owner accept, list facts, fact detail, JSON export, 401 without token, 403 for non-owner review |
 | `TestIdempotencyKeyFlow` | `internal/service/service_test.go` | Idempotency key lifecycle: generate, consume, max-uses enforcement, expiry, nonexistent key, custom TTL/max_uses, invalid principal |
 | `TestIdempotencyKeyHTTP` | `internal/http/smoke_test.go` | HTTP endpoint `POST /api/v1/idempotency-keys`: create with explicit principal, default principal (actor), nonexistent principal → 400, max_uses=0 defaults to 1 |
+| `TestMatchGlob` | `internal/service/pattern_allowlist_test.go` | Glob matching: `**`, `*`, `?`, exact paths, and trailing `/**` |
+| `TestAllowlistIsAllowed` | `internal/service/pattern_allowlist_test.go` | Allowlist file-path matching (allowed/disallowed) |
+| `TestAllowlistPatternAllowed` | `internal/service/pattern_allowlist_test.go` | Module pattern authorization against allowlist |
+| `TestAllowlistNil` | `internal/service/pattern_allowlist_test.go` | Nil allowlist permits everything (opt-out behavior) |
+| `TestValidateModulePatterns` | `internal/service/pattern_allowlist_test.go` | Valid/invalid module patterns, missing module, nil allowlist |
+| `TestReconcileModules` | `internal/service/pattern_allowlist_test.go` | Drifted active module set to `read_only`; valid/read_only modules unaffected; nil allowlist no-op |
+| `TestAcceptProposalRespectsAllowlist` | `internal/service/pattern_allowlist_test.go` | Proposal acceptance blocked for disallowed module patterns |
+| `TestProjectScopedAllowlists` | `internal/service/pattern_allowlist_test.go` | Per-project allowlist isolation, cross-project rejection, project-scoped reconcile |
+| `TestMultiProjectHTTP` | `internal/http/smoke_test.go` | Project CRUD, patterns PUT/GET, module creation with project allowlist enforcement, reconcile endpoint |
+| `TestMultiProjectCrossIsolationHTTP` | `internal/http/smoke_test.go` | Reconciling project A does not affect project B modules |
 
 ## Stop
 
@@ -211,7 +221,7 @@ rm -f mem-sys.db   # remove SQLite file to reset state
 ## Notes
 
 - SQLite is single-writer; the store sets `SetMaxOpenConns(1)` for safety in the MVP.
-- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`, `migrations/002_idempotency_keys.sql`, `migrations/003_add_updated_at_to_modules.sql`).
+- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`, `migrations/002_idempotency_keys.sql`, `migrations/003_add_updated_at_to_modules.sql`, `migrations/004_projects.sql`).
 - To reset state, delete the `--db` file and restart.
 - No external services (Postgres, vector DB, LLM) are required for the MVP.
 
