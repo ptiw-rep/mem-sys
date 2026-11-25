@@ -71,7 +71,7 @@ func TestMVPFlow(t *testing.T) {
 	}
 
 	// fact created
-	facts, err := st.ListFacts(ctx, &m.ID, nil)
+	facts, err := st.ListFacts(ctx, &m.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +201,132 @@ func TestIdempotencyKeyFlow(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for nonexistent principal")
+	}
+}
+
+func TestListProposalsFilterByProjectAndPR(t *testing.T) {
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	st := store.New(d)
+	svc := New(st, Config{AdminOverrideRequiresReason: true})
+	ctx := context.Background()
+
+	if err := st.CreatePrincipal(ctx, store.Principal{ID: "admin-alice", Name: "Alice", Type: "human", GlobalRole: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreatePrincipal(ctx, store.Principal{ID: "user-bob", Name: "Bob", Type: "human", GlobalRole: "user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two projects with modules
+	pA, err := st.CreateProject(ctx, store.Project{Name: "proj-a", Description: "A", Status: "active", CreatedBy: "admin-alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pB, err := st.CreateProject(ctx, store.Project{Name: "proj-b", Description: "B", Status: "active", CreatedBy: "admin-alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modA := store.Module{Name: "mod-a", Description: "A", ProjectID: pA.ID, Status: "active", CreatedBy: "admin-alice"}
+	if err := st.CreateModule(ctx, modA); err != nil {
+		t.Fatal(err)
+	}
+	modAObj, _ := st.GetModuleByName(ctx, "mod-a")
+	modB := store.Module{Name: "mod-b", Description: "B", ProjectID: pB.ID, Status: "active", CreatedBy: "admin-alice"}
+	if err := st.CreateModule(ctx, modB); err != nil {
+		t.Fatal(err)
+	}
+	modBObj, _ := st.GetModuleByName(ctx, "mod-b")
+
+	pr10 := 10
+	pr20 := 20
+
+	// Proposals: A+PR10, A+PR20, B+PR10, B+nil
+	mk := func(modID *string, pr *int, text string) string {
+		t.Helper()
+		p, err := svc.CreateProposal(ctx, CreateProposalInput{
+			SubmitterID:    "user-bob",
+			Source:         "http",
+			RawPayload:     text,
+			NormalizedText: text,
+			Intent:         store.IntentNewFact,
+			TargetModuleID: modID,
+			PRNumber:       pr,
+			IdempotencyKey: "idem-" + text,
+		})
+		if err != nil {
+			t.Fatalf("create proposal: %v", err)
+		}
+		return p.ID
+	}
+	idA10 := mk(&modAObj.ID, &pr10, "a-pr10")
+	idA20 := mk(&modAObj.ID, &pr20, "a-pr20")
+	idB10 := mk(&modBObj.ID, &pr10, "b-pr10")
+	idBnil := mk(&modBObj.ID, nil, "b-nil")
+	_ = idBnil
+	// Filter by project A
+	got, err := st.ListProposals(ctx, nil, nil, &pA.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		for _, p := range got {
+			t.Logf("got: id=%s mod=%v", p.ID, p.TargetModuleID)
+		}
+		t.Fatalf("expected 2 proposals for project A, got %d", len(got))
+	}
+	ids := map[string]bool{}
+	for _, p := range got {
+		ids[p.ID] = true
+	}
+	if !ids[idA10] || !ids[idA20] {
+		t.Fatalf("project A filter returned wrong proposals: %v", ids)
+	}
+
+	// Filter by PR number 10
+	got, err = st.ListProposals(ctx, nil, nil, nil, &pr10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 proposals for PR 10, got %d", len(got))
+	}
+	ids = map[string]bool{}
+	for _, p := range got {
+		ids[p.ID] = true
+	}
+	if !ids[idA10] || !ids[idB10] {
+		t.Fatalf("PR 10 filter returned wrong proposals: %v", ids)
+	}
+
+	// Filter by project B + PR 10
+	got, err = st.ListProposals(ctx, nil, nil, &pB.ID, &pr10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != idB10 {
+		t.Fatalf("expected only b-pr10, got %+v", got)
+	}
+
+	// Filter by project B + PR nil (no pr filter) -> both B proposals
+	got, err = st.ListProposals(ctx, nil, nil, &pB.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 proposals for project B, got %d", len(got))
+	}
+	_ = idBnil
+
+	// Ensure PR number is persisted on returned proposal
+	p10, err := st.GetProposal(ctx, idA10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p10.PRNumber == nil || *p10.PRNumber != 10 {
+		t.Fatalf("expected PRNumber 10, got %+v", p10.PRNumber)
 	}
 }

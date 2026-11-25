@@ -10,43 +10,43 @@ import (
 )
 
 type Fact struct {
-	ID                string     `json:"id"`
-	Title             string     `json:"title"`
-	Kind              string     `json:"kind"`
-	Status            string     `json:"status"`
-	CurrentRevisionID *string    `json:"current_revision_id,omitempty"`
-	OriginProposalID  *string    `json:"origin_proposal_id,omitempty"`
-	CreatedBy         string     `json:"created_by"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                string    `json:"id"`
+	Title             string    `json:"title"`
+	Kind              string    `json:"kind"`
+	Status            string    `json:"status"`
+	CurrentRevisionID *string   `json:"current_revision_id,omitempty"`
+	OriginProposalID  *string   `json:"origin_proposal_id,omitempty"`
+	CreatedBy         string    `json:"created_by"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type FactRevision struct {
-	ID               string     `json:"id"`
-	FactID           string     `json:"fact_id"`
-	Version          int        `json:"version"`
-	Title            string     `json:"title"`
-	Body             string     `json:"body"`
+	ID                string    `json:"id"`
+	FactID            string    `json:"fact_id"`
+	Version           int       `json:"version"`
+	Title             string    `json:"title"`
+	Body              string    `json:"body"`
 	StructuredPayload string    `json:"structured_payload,omitempty"`
-	AuthorID         string     `json:"author_id"`
-	ApprovedBy       *string    `json:"approved_by,omitempty"`
-	SourceProposalID *string    `json:"source_proposal_id,omitempty"`
-	ChangeReason     string     `json:"change_reason,omitempty"`
-	ContentHash      string     `json:"content_hash,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
+	AuthorID          string    `json:"author_id"`
+	ApprovedBy        *string   `json:"approved_by,omitempty"`
+	SourceProposalID  *string   `json:"source_proposal_id,omitempty"`
+	ChangeReason      string    `json:"change_reason,omitempty"`
+	ContentHash       string    `json:"content_hash,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type FactPlacement struct {
-	ID            string     `json:"id"`
-	FactID        string     `json:"fact_id"`
-	ModuleID      string     `json:"module_id"`
-	PlacementType string     `json:"placement_type"`
-	Status        string     `json:"status"`
-	ProposedBy    *string    `json:"proposed_by,omitempty"`
-	ApprovedBy    *string    `json:"approved_by,omitempty"`
-	Reason        string     `json:"reason,omitempty"`
-	ValidFrom     *string    `json:"valid_from,omitempty"`
-	ValidTo       *string    `json:"valid_to,omitempty"`
+	ID            string  `json:"id"`
+	FactID        string  `json:"fact_id"`
+	ModuleID      string  `json:"module_id"`
+	PlacementType string  `json:"placement_type"`
+	Status        string  `json:"status"`
+	ProposedBy    *string `json:"proposed_by,omitempty"`
+	ApprovedBy    *string `json:"approved_by,omitempty"`
+	Reason        string  `json:"reason,omitempty"`
+	ValidFrom     *string `json:"valid_from,omitempty"`
+	ValidTo       *string `json:"valid_to,omitempty"`
 }
 
 func (s *Store) CreateFact(ctx context.Context, f Fact) (*Fact, error) {
@@ -73,7 +73,7 @@ func (s *Store) GetFact(ctx context.Context, id string) (*Fact, error) {
 	return scanFact(row)
 }
 
-func (s *Store) ListFacts(ctx context.Context, moduleID *string, status *string) ([]Fact, error) {
+func (s *Store) ListFacts(ctx context.Context, moduleID *string, status *string, projectID *string) ([]Fact, error) {
 	q := `SELECT f.id, f.title, f.kind, f.status, f.current_revision_id, f.origin_proposal_id, f.created_by, f.created_at, f.updated_at FROM facts f`
 	args := []interface{}{}
 	conds := []string{}
@@ -84,6 +84,10 @@ func (s *Store) ListFacts(ctx context.Context, moduleID *string, status *string)
 	if status != nil {
 		conds = append(conds, `f.status = ?`)
 		args = append(args, *status)
+	}
+	if projectID != nil {
+		conds = append(conds, `EXISTS (SELECT 1 FROM fact_placements p JOIN modules m ON m.id = p.module_id WHERE p.fact_id = f.id AND p.status = 'active' AND m.project_id = ?)`)
+		args = append(args, *projectID)
 	}
 	if len(conds) > 0 {
 		q += ` WHERE ` + join(conds, ` AND `)

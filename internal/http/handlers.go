@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -283,7 +284,7 @@ func (s *Server) handlePatchModule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListModuleFacts(w http.ResponseWriter, r *http.Request) {
 	id := chiParam(r, "module_id")
-	facts, err := s.svc.St().ListFacts(r.Context(), &id, nil)
+	facts, err := s.svc.St().ListFacts(r.Context(), &id, nil, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -293,7 +294,7 @@ func (s *Server) handleListModuleFacts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListModuleProposals(w http.ResponseWriter, r *http.Request) {
 	id := chiParam(r, "module_id")
-	props, err := s.svc.St().ListProposals(r.Context(), &id, nil)
+	props, err := s.svc.St().ListProposals(r.Context(), &id, nil, nil, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -441,6 +442,7 @@ type createProposalReq struct {
 	SymbolHint         string  `json:"symbol_hint"`
 	Intent             string  `json:"intent"`
 	IdempotencyKey     string  `json:"idempotency_key"`
+	PRNumber           *int    `json:"pr_number"`
 	MappingConfidence  float64 `json:"mapping_confidence"`
 	MappingExplanation string  `json:"mapping_explanation"`
 }
@@ -473,6 +475,7 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 		NormalizedText:     text,
 		Intent:             intent,
 		TargetModuleID:     targetModuleID,
+		PRNumber:           in.PRNumber,
 		MappingConfidence:  in.MappingConfidence,
 		MappingExplanation: in.MappingExplanation,
 		IdempotencyKey:     in.IdempotencyKey,
@@ -487,14 +490,28 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListProposals(w http.ResponseWriter, r *http.Request) {
 	moduleID := r.URL.Query().Get("module_id")
 	status := r.URL.Query().Get("status")
-	var mID, st *string
+	projectID := r.URL.Query().Get("project_id")
+	prNumberStr := r.URL.Query().Get("pr_number")
+	var mID, st, pID *string
+	var prNum *int
 	if moduleID != "" {
 		mID = &moduleID
 	}
 	if status != "" {
 		st = &status
 	}
-	props, err := s.svc.St().ListProposals(r.Context(), mID, st)
+	if projectID != "" {
+		pID = &projectID
+	}
+	if prNumberStr != "" {
+		n, err := strconv.Atoi(prNumberStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid pr_number")
+			return
+		}
+		prNum = &n
+	}
+	props, err := s.svc.St().ListProposals(r.Context(), mID, st, pID, prNum)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -565,7 +582,12 @@ func (s *Server) handleReviewProposal(w http.ResponseWriter, r *http.Request) {
 // ---- facts ----
 
 func (s *Server) handleListFacts(w http.ResponseWriter, r *http.Request) {
-	facts, err := s.svc.St().ListFacts(r.Context(), nil, nil)
+	projectID := r.URL.Query().Get("project_id")
+	var pID *string
+	if projectID != "" {
+		pID = &projectID
+	}
+	facts, err := s.svc.St().ListFacts(r.Context(), nil, nil, pID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

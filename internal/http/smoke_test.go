@@ -483,3 +483,115 @@ func TestMultiProjectCrossIsolationHTTP(t *testing.T) {
 		t.Fatalf("modB should remain active, got %s", m.Module.Status)
 	}
 }
+
+func TestListProposalsFilterByProjectAndPRHTTP(t *testing.T) {
+	_, h, _ := smokeServer(t)
+
+	createProject := func(name string) string {
+		t.Helper()
+		res, body := do(t, h, "POST", "/api/v1/projects", "admin-alice", map[string]interface{}{"name": name})
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("create project %s: %d %s", name, res.StatusCode, string(body))
+		}
+		var r struct {
+			Project struct {
+				ID string `json:"id"`
+			} `json:"project"`
+		}
+		_ = json.Unmarshal(body, &r)
+		return r.Project.ID
+	}
+	createModule := func(name, projectID string) {
+		t.Helper()
+		res, body := do(t, h, "POST", "/api/v1/modules", "admin-alice", map[string]interface{}{
+			"name": name, "project_id": projectID, "path_patterns": []string{"**"},
+		})
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("create module %s: %d %s", name, res.StatusCode, string(body))
+		}
+	}
+	pA := createProject("proj-a-filter")
+	pB := createProject("proj-b-filter")
+	createModule("mod-a-filter", pA)
+	createModule("mod-b-filter", pB)
+
+	submit := func(text, moduleHint string, pr *int) string {
+		t.Helper()
+		bodyReq := map[string]interface{}{
+			"text":            text,
+			"module_hint":     moduleHint,
+			"intent":          "new_fact",
+			"idempotency_key": "idem-" + text,
+		}
+		if pr != nil {
+			bodyReq["pr_number"] = *pr
+		}
+		res, body := do(t, h, "POST", "/api/v1/proposals", "user-bob", bodyReq)
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("submit proposal: %d %s", res.StatusCode, string(body))
+		}
+		var r struct {
+			Proposal struct {
+				ID string `json:"id"`
+			} `json:"proposal"`
+		}
+		_ = json.Unmarshal(body, &r)
+		return r.Proposal.ID
+	}
+
+	pr10 := 10
+	pr20 := 20
+	idA10 := submit("a10", "mod-a-filter", &pr10)
+	_ = submit("a20", "mod-a-filter", &pr20)
+	idB10 := submit("b10", "mod-b-filter", &pr10)
+	_ = submit("bnil", "mod-b-filter", nil)
+
+	// Filter by project
+	res, body := do(t, h, "GET", "/api/v1/proposals?project_id="+pA, "admin-alice", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list by project: %d %s", res.StatusCode, string(body))
+	}
+	var listResp struct {
+		Proposals []struct {
+			ID       string `json:"id"`
+			PRNumber *int   `json:"pr_number"`
+		} `json:"proposals"`
+	}
+	if err := json.Unmarshal(body, &listResp); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(listResp.Proposals) != 2 {
+		t.Fatalf("expected 2 proposals for project A, got %d: %s", len(listResp.Proposals), string(body))
+	}
+
+	// Filter by pr_number
+	res, body = do(t, h, "GET", "/api/v1/proposals?pr_number=10", "admin-alice", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list by pr: %d %s", res.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, &listResp); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(listResp.Proposals) != 2 {
+		t.Fatalf("expected 2 proposals for PR 10, got %d", len(listResp.Proposals))
+	}
+
+	// Filter by project + pr_number
+	res, body = do(t, h, "GET", "/api/v1/proposals?project_id="+pB+"&pr_number=10", "admin-alice", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list by project+pr: %d %s", res.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, &listResp); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(listResp.Proposals) != 1 || listResp.Proposals[0].ID != idB10 {
+		t.Fatalf("expected only b10, got %+v", listResp.Proposals)
+	}
+
+	// Invalid pr_number
+	res, body = do(t, h, "GET", "/api/v1/proposals?pr_number=abc", "admin-alice", nil)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid pr_number, got %d %s", res.StatusCode, string(body))
+	}
+	_ = idA10
+}

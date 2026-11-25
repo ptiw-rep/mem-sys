@@ -200,13 +200,14 @@ type moveParams struct {
 }
 
 type proposeFactArgs struct {
-	Text               string  `json:"text"`
-	ModuleHint         string  `json:"module_hint"`
-	FileHint           string  `json:"file_hint"`
-	SymbolHint         string  `json:"symbol_hint"`
-	Intent             string  `json:"intent"`
-	IdempotencyKey     string  `json:"idempotency_key"`
-	MappingConfidence  float64 `json:"mapping_confidence"`
+	Text              string  `json:"text"`
+	ModuleHint        string  `json:"module_hint"`
+	FileHint          string  `json:"file_hint"`
+	SymbolHint        string  `json:"symbol_hint"`
+	Intent            string  `json:"intent"`
+	IdempotencyKey    string  `json:"idempotency_key"`
+	PRNumber          *int    `json:"pr_number"`
+	MappingConfidence float64 `json:"mapping_confidence"`
 }
 
 func (s *Server) getMyRoles(ctx context.Context) (interface{}, error) {
@@ -243,7 +244,7 @@ func (s *Server) listModuleFacts(ctx context.Context, args json.RawMessage) (int
 	if err := json.Unmarshal(args, &p); err != nil {
 		return nil, err
 	}
-	return s.svc.St().ListFacts(ctx, &p.ModuleID, nil)
+	return s.svc.St().ListFacts(ctx, &p.ModuleID, nil, nil)
 }
 
 func (s *Server) getFact(ctx context.Context, args json.RawMessage) (interface{}, error) {
@@ -286,33 +287,39 @@ func (s *Server) proposeFact(ctx context.Context, args json.RawMessage) (interfa
 		}
 	}
 	return s.svc.CreateProposal(ctx, service.CreateProposalInput{
-		SubmitterID:         a.PrincipalID,
-		Source:              "mcp",
-		RawPayload:          in.Text,
-		NormalizedText:      in.Text,
-		Intent:              intent,
-		TargetModuleID:      targetModuleID,
-		MappingConfidence:   in.MappingConfidence,
-		IdempotencyKey:      in.IdempotencyKey,
+		SubmitterID:       a.PrincipalID,
+		Source:            "mcp",
+		RawPayload:        in.Text,
+		NormalizedText:    in.Text,
+		Intent:            intent,
+		TargetModuleID:    targetModuleID,
+		PRNumber:          in.PRNumber,
+		MappingConfidence: in.MappingConfidence,
+		IdempotencyKey:    in.IdempotencyKey,
 	})
 }
 
 func (s *Server) listProposals(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var p struct {
-		ModuleID string `json:"module_id"`
-		Status   string `json:"status"`
+		ModuleID  string `json:"module_id"`
+		Status    string `json:"status"`
+		ProjectID string `json:"project_id"`
+		PRNumber  *int   `json:"pr_number"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return nil, err
 	}
-	var mID, st *string
+	var mID, st, pID *string
 	if p.ModuleID != "" {
 		mID = &p.ModuleID
 	}
 	if p.Status != "" {
 		st = &p.Status
 	}
-	return s.svc.St().ListProposals(ctx, mID, st)
+	if p.ProjectID != "" {
+		pID = &p.ProjectID
+	}
+	return s.svc.St().ListProposals(ctx, mID, st, pID, p.PRNumber)
 }
 
 func (s *Server) getProposal(ctx context.Context, args json.RawMessage) (interface{}, error) {
@@ -361,9 +368,9 @@ func (s *Server) moveFact(ctx context.Context, args json.RawMessage) (interface{
 		return nil, err
 	}
 	return s.svc.MoveFact(ctx, service.MoveFactInput{
-		FactID:     in.FactID,
-		ToModuleID: in.ToModuleID,
-		Reason:     in.Reason,
+		FactID:      in.FactID,
+		ToModuleID:  in.ToModuleID,
+		Reason:      in.Reason,
 		InitiatedBy: service.ActorFromCtx(ctx).PrincipalID,
 	})
 }

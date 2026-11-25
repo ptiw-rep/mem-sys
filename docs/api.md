@@ -160,13 +160,20 @@ Submit a proposal. Idempotency via `Idempotency-Key` header or `idempotency_key`
   "file_hint": "services/auth/login.go",
   "symbol_hint": "handleLogin",
   "intent": "new_fact",
+  "pr_number": 42,
   "idempotency_key": "prop-login-001",
   "mapping_confidence": 0.9
 }
 ```
 
-### GET /proposals?module_id=X&status=Y
-List proposals (optional module/status filter).
+`pr_number` is optional and can be used to associate the proposal with a pull request.
+
+### GET /proposals?module_id=X&status=Y&project_id=Z&pr_number=N
+List proposals. All query parameters are optional filters:
+- `module_id` - proposals targeted at a module
+- `status` - proposal status (e.g. `submitted`, `accepted`)
+- `project_id` - proposals whose target module belongs to the project
+- `pr_number` - proposals associated with a pull request number
 
 ### GET /proposals/{proposal_id}
 Get a single proposal.
@@ -254,8 +261,8 @@ Idempotency keys are consumed when a proposal is created with that key and a mat
 
 ## 6. Facts
 
-### GET /facts
-List all active facts.
+### GET /facts?project_id=X
+List all active facts. Optional `project_id` filter returns facts with an active placement in a module belonging to the project.
 
 ### GET /facts/{fact_id}
 Get a fact with its revisions, placements, and anchors.

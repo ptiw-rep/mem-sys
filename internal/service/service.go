@@ -291,6 +291,7 @@ type CreateProposalInput struct {
 	Intent             store.ProposalIntent
 	LinkedFactID       *string
 	TargetModuleID     *string
+	PRNumber           *int
 	MappingConfidence  float64
 	MappingExplanation string
 	IdempotencyKey     string
@@ -306,6 +307,7 @@ func (s *Service) CreateProposal(ctx context.Context, in CreateProposalInput) (*
 		Intent:             in.Intent,
 		LinkedFactID:       in.LinkedFactID,
 		TargetModuleID:     in.TargetModuleID,
+		PRNumber:           in.PRNumber,
 		Status:             "submitted",
 		MappingConfidence:  in.MappingConfidence,
 		MappingExplanation: in.MappingExplanation,
@@ -707,11 +709,11 @@ func (s *Service) ExportModule(ctx context.Context, scope ExportScope) ([]byte, 
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	facts, err := s.st.ListFacts(ctx, &scope.ModuleID, strPtr("active"))
+	facts, err := s.st.ListFacts(ctx, &scope.ModuleID, strPtr("active"), nil)
 	if err != nil {
 		return nil, err
 	}
-	proposals, err := s.st.ListProposals(ctx, &scope.ModuleID, nil)
+	proposals, err := s.st.ListProposals(ctx, &scope.ModuleID, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

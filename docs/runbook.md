@@ -210,6 +210,8 @@ ok  mem-sys/internal/service
 | `TestProjectScopedAllowlists` | `internal/service/pattern_allowlist_test.go` | Per-project allowlist isolation, cross-project rejection, project-scoped reconcile |
 | `TestMultiProjectHTTP` | `internal/http/smoke_test.go` | Project CRUD, patterns PUT/GET, module creation with project allowlist enforcement, reconcile endpoint |
 | `TestMultiProjectCrossIsolationHTTP` | `internal/http/smoke_test.go` | Reconciling project A does not affect project B modules |
+| `TestListProposalsFilterByProjectAndPR` | `internal/service/service_test.go` | Filter proposals by `project_id` and/or `pr_number` (service/store layer) |
+| `TestListProposalsFilterByProjectAndPRHTTP` | `internal/http/smoke_test.go` | `GET /proposals?project_id=&pr_number=` filtering, including invalid `pr_number` 400 |
 
 ## Stop
 
@@ -221,7 +223,7 @@ rm -f mem-sys.db   # remove SQLite file to reset state
 ## Notes
 
 - SQLite is single-writer; the store sets `SetMaxOpenConns(1)` for safety in the MVP.
-- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`, `migrations/002_idempotency_keys.sql`, `migrations/003_add_updated_at_to_modules.sql`, `migrations/004_projects.sql`).
+- Database migrations run automatically on startup (`migrations/001_core_mvp.sql`, `migrations/002_idempotency_keys.sql`, `migrations/003_add_updated_at_to_modules.sql`, `migrations/004_projects.sql`, `migrations/005_proposal_pr_number.sql`).
 - To reset state, delete the `--db` file and restart.
 - No external services (Postgres, vector DB, LLM) are required for the MVP.
 
